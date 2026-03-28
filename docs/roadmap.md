@@ -30,11 +30,13 @@ Deliverable: a repo where the objectives are implemented, the query bank runs, a
 
 Tasks:
 - [ ] Wire up live query collection hooks in the Qwen 2 inference loop (adapt patterns from `kv_compaction_experiment`)
+- [ ] Add `repeat-prefill` reference query strategy as a control: run "Context. Repeat it. Context." prefill and extract query vectors. This is the paper's cheapest strong baseline (~8s for 60k tokens) and establishes a reference ceiling for what a good offline query bank can achieve.
 - [ ] Implement full baseline comparison pipeline:
   - Recency selection (no refit)
   - Attention-mass selection (no refit)
   - Recency selection + beta-refit
   - Attention-mass selection + beta-refit
+  - Paper-style HighestAttnKeys + NNLS β + LS Cv (direct paper control)
   - Uniform selection (sanity check)
 - [ ] Held-out verification pipeline: split query bank into fit / holdout, evaluate L_true on holdout
 - [ ] Results logging and basic plots (response error vs. budget fraction, by baseline)

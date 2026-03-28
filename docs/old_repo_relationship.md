@@ -1,6 +1,64 @@
-# Relationship to kv_compaction_experiment
+# Relationship to kv_compaction_experiment and the Attention Matching Paper
 
-This document records what `kv_compaction_experiment` did, what framing it used, and what carries forward into this repo vs. what is new.
+This document records what `kv_compaction_experiment` did, what framing it used, and what carries forward into this repo vs. what is new. It also captures key details from the Attention Matching paper that directly inform this work.
+
+---
+
+## The Attention Matching Paper
+
+**Citation**: "Fast KV Compaction via Attention Matching", Zweiger, Fu, Guo, Kim (MIT, 2025). arXiv:2602.16284. Code: https://github.com/adamzweiger/compaction.
+
+**Reference implementation location in old repo**: `third_party/compaction_paper/`
+
+**Reference digest in old repo**: `docs/reference/paper_digest.md`
+
+### What the paper proves and does
+
+The paper establishes that KV cache compaction can be cast as an optimization over $(C_k, \beta, C_v)$ — compact keys, per-key scalar biases (in log space), and compact values — such that the compacted representation preserves:
+1. **Attention mass** (= our $Z$): $\sum_j \exp(q (C_k)^\top_j + \beta_j) \approx \sum_i \exp(q K_i^\top)$
+2. **Attention output** (= our $N/Z$): the local softmax-weighted value sum
+
+The key insight (Appendix A.2): matching these two quantities is **sufficient for preservation under arbitrary future concatenation**. This is the same concatenation property at the heart of this repo's N/Z framing.
+
+### The paper's decomposition
+
+Given a fixed subset of keys $C_k \subseteq K$, the joint problem decomposes into two closed-form steps:
+
+- **$\beta$ fit (NNLS on mass)**: solve $\min_{w \geq 0} \| A w - m \|_2^2$ where $A_{ij} = \exp(q_i (C_k)_j^\top)$ and $m_i = Z_\mu(q_i)$. Set $\beta_j = \log(w_j)$. In our notation: $w_j = \beta_j^{\text{ours}}$.
+- **$C_v$ fit (LS on output)**: with $C_k$ and $\beta$ fixed, solve ordinary least squares for $C_v$ minimizing $\| X C_v - Y \|_F^2$ where $Y_i = A_\mu(q_i)$.
+
+Key selection methods:
+- **HighestAttnKeys**: retain keys with highest RMS attention mass under reference queries. Fast and effective.
+- **OMP**: greedy residual minimization on the mass objective. Equivalent to greedy support selection under $L_Z$. Stronger but ~100–500× slower.
+
+### Reference query strategies
+
+The paper considers three strategies for constructing the reference query set (the "query bank" in our framing):
+
+| Strategy | How | Runtime (60k tokens, H200) | Notes |
+|---|---|---|---|
+| `context-prefill` | Prefill context alone; extract query vectors | Fast | Slightly weaker than repeat-prefill |
+| `repeat-prefill` | Prefill "Context. Repeat it. Context." | ~8s | Paper default; good balance |
+| `self-study` | Sample synthetic Q&A pairs; extract queries | ~139s | Best quality; expensive |
+
+The paper uses `repeat-prefill` as the primary source and `self-study` to supplement. Random Gaussian queries work but are worse. This is directly relevant to our query bank design: `repeat-prefill` is the lowest-cost baseline strategy worth implementing first.
+
+### Key empirical findings
+
+- Query generation is the dominant runtime cost (7–139s), not fitting (4s total for $\beta$ + $C_v$).
+- OMP is strongest but ~100× slower than HighestAttnKeys; OMP-fast (batch key selection) recovers most of the gap.
+- Nonuniform head budgets (precomputed per model) improve results substantially at no inference-time cost.
+- Per-layer "on-policy" queries (recomputing queries with earlier layers already compacted) give consistent small improvements.
+- The paper achieves up to 50× compaction with little quality loss on QuALITY and LongHealth.
+
+### What this repo is not trying to do
+
+This repo is **not** trying to replicate the paper's best results (AM-OMP with self-study + nonuniform budgets). That is explicitly a non-goal for Phase 1 and 2.
+
+The paper is used as:
+- An objective definition and mathematical framing (we generalize it)
+- A source of baseline methodology (HighestAttnKeys, NNLS $\beta$ fit, LS $C_v$ fit)
+- A performance reference for the "paper method" control condition
 
 ---
 
@@ -19,18 +77,20 @@ The repo produced working experiment infrastructure and baseline comparisons, an
 
 ## Old Framing vs. New Framing
 
-| Aspect | kv_compaction_experiment | kv_operator_matching |
-|--------|--------------------------|----------------------|
-| Core object | Attention distribution softmax(q K^T) | Attention response operator A_mu(q) = N_mu(q) / Z_mu(q) |
-| Factorization | None explicit | N/Z factorization: separate Z (partition) and N (numerator) |
-| Composition across blocks | Not clean; softmax re-normalizes | Exact: A_{P||F} = (N_P + N_F) / (Z_P + Z_F) |
-| Support restriction | Always drawn from original KV cache | Can be synthetic/merged; beta weighting |
-| Objective | Match softmax attention weights | Match response operator A_mu(q) over query bank |
-| Surrogate losses | Ad hoc | L_Z, L_N, L_lin (convex in beta for fixed support) |
-| Theoretical grounding | Informal | N/Z framing has formal concatenation property; beta-refit is NNLS |
-| Scope | Compression as token selection | Compression as measure approximation |
+| Aspect | Attention Matching paper | kv_compaction_experiment | kv_operator_matching |
+|--------|--------------------------|--------------------------|----------------------|
+| Core object | Attention output + mass per head | Attention distribution softmax(q K^T) | Response operator A_mu(q) = N_mu(q) / Z_mu(q) |
+| Factorization | Implicit: β enters as log(w) bias | None explicit | Explicit N/Z: separate Z (partition) and N (numerator) |
+| Composition across blocks | Proved in Appendix A.2; motivates mass matching | Not clean; softmax re-normalizes | First-class: A_{P||F} = (N_P + N_F) / (Z_P + Z_F) |
+| Support restriction | Subset of original keys Ck ⊆ K | Always drawn from original cache | Can be synthetic/merged; β are fit coefficients |
+| β parameterization | β_j = log(w_j), fit via NNLS on Z | Not present | β_j ≥ 0 directly; same math as paper's w_j |
+| Cv / value fitting | Separate LS step after β | Not present | Unified in L_N; equivalent to paper's Cv fit |
+| Reference queries | Separate prefill pass (context/repeat/self-study) | Ad hoc from live inference | Live query bank; online collection is the hypothesis |
+| Surrogate losses | L_Z then L_N sequential (paper's two-step) | Ad hoc | L_Z + L_N jointly (L_lin); equivalent, potentially tighter |
+| Theoretical grounding | Concatenation property proved; NNLS for β | Informal | N/Z extends paper's framing; formal in same sense |
+| Scope | Single-context compaction; offline query gen | Online experiment scaffold | Online evidence → operator approximation |
 
-The key conceptual shift: old framing treated KV compression as selecting a subset of tokens. New framing treats it as approximating a measure (operator), where the support can be anything and the weights (betas) are fit coefficients, not indicators.
+The key conceptual shift from the old experiment repo: the old repo approximated attention matching informally, without the paper's decomposition. This repo adopts the paper's decomposition as a foundation and generalizes it toward online evidence collection, synthetic support, and progressive structure.
 
 ---
 

@@ -100,13 +100,54 @@ No refitting is needed when new tokens arrive. This is the key practical propert
 
 ## 5. Relationship to Attention Matching
 
-The **Attention Matching** objective (from the prior `kv_compaction_experiment` direction and the Attention Matching paper) aims to match the attention weight distribution:
+### 5.1 The Attention Matching paper
 
-$$\text{attn}_\mu(q) = \text{softmax}(\langle q, k_i \rangle)_i$$
+The paper "Fast KV Compaction via Attention Matching" (Zweiger et al., 2025; arXiv 2602.16284) defines a compaction objective that is the direct precursor to this repo's framing. The paper's formulation is worth stating precisely because it maps almost exactly onto the N/Z framework.
 
-This can be seen as a special case of the N/Z framing restricted to one-hot value vectors. Specifically, if $v_i = e_i$ (standard basis vectors), then $A_\mu(q) = \text{softmax}(\langle q, k_i \rangle)$, which is the attention distribution.
+For a context with keys $K \in \mathbb{R}^{T \times d}$ and values $V \in \mathbb{R}^{T \times d_v}$, the paper seeks compact $(C_k, \beta^{\mathrm{AM}}, C_v)$ with $C_k, C_v \in \mathbb{R}^{t \times d}$ and $\beta^{\mathrm{AM}} \in \mathbb{R}^t$ such that for reference queries $q_1, \ldots, q_n$:
 
-The N/Z framing is strictly more general: it operates on actual value vectors, not just attention weights, and it does not require softmax normalization to be the output object. The concatenation property holds in the N/Z frame; it does not hold as cleanly for the softmax distribution directly (because softmax re-normalizes across the full sequence).
+**Output matching (Eq. 1 in paper)**:
+$$\frac{\exp(q K^\top) V}{\sum_j \exp(q K^\top_j)} \approx \frac{\exp(q C_k^\top + \beta^{\mathrm{AM}}) C_v}{\sum_j \exp(q (C_k)^\top_j + \beta^{\mathrm{AM}}_j)}$$
+
+**Mass matching (Eq. 2 in paper)**:
+$$\sum_{i=1}^{T} \exp(q K_i^\top) \approx \sum_{j=1}^{t} \exp(q (C_k)^\top_j + \beta^{\mathrm{AM}}_j)$$
+
+In N/Z notation, setting $w_j = \exp(\beta^{\mathrm{AM}}_j)$ (so $w_j > 0$):
+
+- Mass matching = $Z_\mu(q) \approx Z_{\hat{\mu}}(q)$ = our $L_Z$ objective.
+- Output matching with $Z$ matched = $N_\mu(q) \approx N_{\hat{\mu}}(q)$ = our $L_N$ objective.
+
+The paper's scalar bias $\beta^{\mathrm{AM}}_j$ corresponds to $\log(\beta_j)$ in our notation, where $\beta_j \geq 0$ are our measure coefficients. The math is identical; only the parameterization differs.
+
+### 5.2 The paper's decomposition into subproblems
+
+A key algorithmic insight from the paper: the joint optimization over $(C_k, \beta^{\mathrm{AM}}, C_v)$ decomposes into three sequential closed-form subproblems when $C_k$ is restricted to a subset of the original keys.
+
+**Step 1 — Key selection** ($C_k \subseteq K$): select $t$ keys from the original cache. The paper considers two methods: HighestAttnKeys (fast heuristic: highest RMS attention mass under reference queries) and OMP (greedy residual minimization on the mass objective). OMP is equivalent to greedy support selection under $L_Z$.
+
+**Step 2 — $\beta$ / mass fitting**: given $C_k$, solve for $w \geq 0$ via NNLS:
+$$\min_{w \geq 0} \| A w - m \|_2^2, \quad A_{ij} = \exp(q_i (C_k)^\top_j), \quad m_i = Z_\mu(q_i)$$
+Then $\beta^{\mathrm{AM}}_j = \log(w_j)$. This is a direct application of our $L_Z$ NNLS formulation with $\beta_j = w_j$.
+
+**Step 3 — $C_v$ / value fitting**: given $C_k$ and $w$, solve ordinary least squares:
+$$\min_{C_v} \| X C_v - Y \|_F^2$$
+where $Y_i = A_\mu(q_i)$ (original attention output) and $X_{i,j} \propto w_j \exp(q_i (C_k)^\top_j)$ (compact attention weights). This is equivalent to minimizing the output-matching part of our $L_N$ with $C_k$ and $\beta$ fixed.
+
+In our framing: the paper solves $L_Z$ first (for $\beta$) then $L_N$ conditioned on $\beta$ (for $C_v$). We express both as a joint objective $L_{\text{lin}} = L_Z + L_N$, which is equally tractable when support is fixed — both reduce to NNLS / LS subproblems.
+
+### 5.3 How this generalizes the paper
+
+The paper's formulation:
+- Restricts $C_k$ to subsets of the original keys.
+- Uses fixed support and solves $\beta$, $C_v$ in closed form.
+- Uses a fixed reference query set obtained by prefilling the context.
+
+This repo's framing generalizes in three directions:
+1. **Online query evidence**: reference queries come from live inference, not a separate prefill pass.
+2. **Synthetic support**: $C_k$ and $C_v$ need not be drawn from the original cache; they can be merged or constructed.
+3. **Progressive structure**: the additive structure of $Z$ and $N$ supports hierarchical representations (Phase 4).
+
+The concatenation property (Section 4) appears in the paper's Appendix A.2 as motivation for the mass-matching objective. The N/Z framing makes this property first-class and extends it to support streaming and incremental update.
 
 ---
 
@@ -129,6 +170,16 @@ Both are **linear in $\beta$**. Therefore:
 With the nonnegativity constraint $\beta \geq 0$, this is a **nonnegative least squares (NNLS)** problem. It has a unique solution (if the feature matrix has full column rank) and can be solved efficiently.
 
 **This is theorem-friendly**: fixed-support $\beta$-refit under $L_{\text{lin}}$ is a convex NNLS problem. The $L_{\text{true}}$ objective is not convex in $\beta$ in general, but can be used for held-out verification.
+
+### Relationship to the paper's two-step fit
+
+The paper (Section 3.2) decomposes the fixed-support fit differently:
+- Fit $\beta$ via NNLS on the mass (Z) objective alone, ignoring $L_N$.
+- Then fit $C_v$ via ordinary LS on the output matching (N/Z) objective with $\beta$ fixed.
+
+Both steps are closed-form and efficient. The result is the same family of solutions as our $L_{\text{lin}}$ NNLS, but reached via a different optimization path. The paper's sequential approach is faster (smaller systems) but potentially suboptimal versus joint $L_{\text{lin}}$ minimization, because the $\beta$ fit in step 1 ignores value information.
+
+In practice, either approach is a reasonable starting point. The paper reports that $\beta$ fitting and value fitting together take ~4 seconds on 60k-token contexts (Gemma-3-12B on H200), so the difference in the two-step vs. joint approach is unlikely to dominate runtime in our setting. The main bottleneck is query generation (7–139 seconds depending on strategy).
 
 ---
 
