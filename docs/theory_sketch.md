@@ -52,6 +52,12 @@ $$\hat{\mathcal{Q}} = \{(q_t, w_t)\}_{t=1}^{T}$$
 
 where $q_t$ are live query vectors collected during inference and $w_t$ are importance weights (recency decay, attention mass, or uniform).
 
+Three distinct loss objects appear in this repo. It is worth naming them explicitly:
+
+- $L_{\text{true}}(\hat{\mu}, \mu; \mathcal{Q})$: **population loss** — the ideal objective over the true (unknown) query distribution $\mathcal{Q}$. Defined in Section 2. Not directly optimizable.
+- $\hat{L}_{\text{true}}(\hat{\mu}, \mu; \hat{\mathcal{Q}})$: **empirical true loss** — the same ratio-matching objective evaluated on the query bank. Used at checkpoints for verification, not for fitting.
+- $L_{\text{lin}}(\hat{\mu}, \mu; \hat{\mathcal{Q}})$: **empirical surrogate** — a tractable proxy for $\hat{L}_{\text{true}}$ used during fitting.
+
 The empirical true-response loss is:
 
 $$\hat{L}_{\text{true}} = \sum_t w_t \| A_{\hat{\mu}}(q_t) - A_\mu(q_t) \|_2^2$$
@@ -74,7 +80,7 @@ $$L_N = \sum_t w_t \| N_{\hat{\mu}}(q_t) - N_\mu(q_t) \|_2^2$$
 
 $$L_{\text{lin}} = L_Z + L_N$$
 
-**Practical approach**: optimize $L_{\text{lin}}$ (tractable), verify on $\hat{L}_{\text{true}}$ (expensive but used only at checkpoints). The surrogate is faithful when $Z_{\hat{\mu}}(q) \approx Z_\mu(q)$, since then $A_{\hat{\mu}} = N_{\hat{\mu}} / Z_{\hat{\mu}} \approx N_{\hat{\mu}} / Z_\mu$.
+**Practical approach**: optimize $L_{\text{lin}}$ (tractable), verify on $\hat{L}_{\text{true}}$ (used only at checkpoints). The surrogate is a reasonable approximation to $\hat{L}_{\text{true}}$ when denominator mismatch is small: if $Z_{\hat{\mu}}(q) \approx Z_\mu(q)$, then $A_{\hat{\mu}} = N_{\hat{\mu}} / Z_{\hat{\mu}} \approx N_{\hat{\mu}} / Z_\mu$, so $L_N$ controls response error up to second-order denominator terms. No formal bound is claimed here.
 
 ---
 
@@ -131,7 +137,7 @@ Then $\beta^{\mathrm{AM}}_j = \log(w_j)$. This is a direct application of our $L
 
 **Step 3 — $C_v$ / value fitting**: given $C_k$ and $w$, solve ordinary least squares:
 $$\min_{C_v} \| X C_v - Y \|_F^2$$
-where $Y_i = A_\mu(q_i)$ (original attention output) and $X_{i,j} \propto w_j \exp(q_i (C_k)^\top_j)$ (compact attention weights). This is equivalent to minimizing the output-matching part of our $L_N$ with $C_k$ and $\beta$ fixed.
+where $Y_i = A_\mu(q_i)$ (original attention output) and $X_{i,j} \propto w_j \exp(q_i (C_k)^\top_j)$ (compact attention weights). This closely corresponds to minimizing $L_N$ with $C_k$ and $\beta$ fixed, though not identically: the paper's $X$ uses normalized compact attention weights while our $L_N$ formulation uses unnormalized numerator terms. The two are equivalent when $Z$ is already matched; otherwise they differ at second order.
 
 In our framing: the paper solves $L_Z$ first (for $\beta$) then $L_N$ conditioned on $\beta$ (for $C_v$). We express both as a joint objective $L_{\text{lin}} = L_Z + L_N$, which is equally tractable when support is fixed — both reduce to NNLS / LS subproblems.
 
@@ -167,9 +173,11 @@ Both are **linear in $\beta$**. Therefore:
 - $L_N$ as a function of $\beta$ is a quadratic (convex)
 - $L_{\text{lin}}$ is a convex quadratic in $\beta$
 
-With the nonnegativity constraint $\beta \geq 0$, this is a **nonnegative least squares (NNLS)** problem. It has a unique solution (if the feature matrix has full column rank) and can be solved efficiently.
+With the nonnegativity constraint $\beta \geq 0$, this is a **nonnegative least squares (NNLS)** problem. It has a unique solution if the feature matrix $\Phi \in \mathbb{R}^{T \times m}$ with $\Phi_{tj} = \exp(\langle q_t, \hat{k}_j \rangle)$ has full column rank. This can be solved efficiently via standard NNLS solvers (e.g., `scipy.optimize.nnls`).
 
-**This is theorem-friendly**: fixed-support $\beta$-refit under $L_{\text{lin}}$ is a convex NNLS problem. The $L_{\text{true}}$ objective is not convex in $\beta$ in general, but can be used for held-out verification.
+**Practical note on conditioning**: in practice the feature matrix may be ill-conditioned, particularly when support keys are similar or the query bank is small. Adding a ridge term $\lambda \| \beta \|_2^2$ is the standard fallback: it stabilizes the solve without changing the convex structure. The tradeoff is a small bias toward equal weighting. A small default $\lambda$ (e.g., $10^{-4}$ times the diagonal scale) is sufficient in most cases.
+
+**This is theorem-friendly**: fixed-support $\beta$-refit under $L_{\text{lin}}$ is a convex NNLS problem (with optional ridge). The $\hat{L}_{\text{true}}$ objective is not convex in $\beta$ in general, but can be used for held-out verification after fitting.
 
 ### Relationship to the paper's two-step fit
 
@@ -183,16 +191,54 @@ In practice, either approach is a reasonable starting point. The paper reports t
 
 ---
 
-## 7. Open Theoretical Questions
+## 6.5 Practical Experimental Interpretation
 
-**Q1. Response sparsity.** For typical transformer KV caches, how sparse is the effective support of $A_\mu(q)$ over a realistic query distribution? Is there a small set of support points that captures most of the operator mass? Empirical answer pending; formal characterization is open.
+This section bridges the theoretical formulation to the first concrete experiment.
 
-**Q2. Spectral decay.** Does the kernel matrix $K_{ij} = \exp(\langle q_i, k_j \rangle)$ for query-key pairs exhibit rapid spectral decay in practice? If so, low-rank approximations of the feature matrix would be accurate with far fewer support points than $n$. Related to existing attention approximation literature but not directly answered for the N/Z framing.
+**Online collection phase** (hot path, cheap):
+- At each decode step, the query vector $q_t$ is intercepted via a forward hook.
+- $q_t$ is added to the empirical query bank with weight $w_t$ (recency decay by default).
+- The bank is trimmed to `max_queries` entries. No cache mutation.
+
+**Boundary compaction phase** (checkpoint, expensive):
+1. Retrieve the current KV cache state $\mu$ for a given head and layer.
+2. Select support: run one of the baseline selection rules (recency, attention mass, etc.) to obtain $\{(\hat{k}_j, \hat{v}_j)\}_{j=1}^m$.
+3. Fit $\beta$ via NNLS on $L_{\text{lin}}$ using the query bank.
+4. Evaluate $\hat{L}_{\text{true}}$ on a held-out split of the query bank.
+5. If the verification check passes (error below threshold), activate the compact representation. Otherwise, keep the original.
+
+**Baselines for the first Qwen 2 experiment**:
+
+| Method | Support selection | $\beta$ fit | $C_v$ fit |
+|---|---|---|---|
+| Recency | Most recent $m$ tokens | None ($\beta_j = 1$) | None ($C_v = V_S$) |
+| Attention mass | Highest RMS attn mass | None ($\beta_j = 1$) | None ($C_v = V_S$) |
+| Paper control | Highest RMS attn mass | NNLS on $L_Z$ | LS on output |
+| **Operator matching** | Highest RMS attn mass | **NNLS on $L_{\text{lin}}$** | Included in $\beta$ fit |
+| Uniform | Random | None | None |
+
+The central hypothesis: using live query evidence and $L_{\text{lin}}$ fitting improves response preservation over static selection at the same memory budget.
+
+---
+
+## 7. Open Questions
+
+### 7.1 Near-term empirical questions
+
+These can be investigated in Phase 2–3 experiments with the current framework.
+
+**Q1. Response sparsity.** For typical transformer KV caches, how sparse is the effective support of $A_\mu(q)$ over a realistic query distribution? Is there a small set of support points that captures most of the operator mass under $\hat{L}_{\text{true}}$? This is the central empirical bet of the repo. Measurable directly in the Qwen 2 experiment by plotting response error vs. support size.
+
+**Q2. Spectral decay.** Does the kernel matrix $\Phi_{tj} = \exp(\langle q_t, k_j \rangle)$ exhibit rapid spectral decay in practice? If so, low-rank approximations of the feature matrix would be accurate with far fewer support points than $n$. Measurable by computing the SVD of $\Phi$ on collected query banks.
+
+**Q5. Positional structure.** Transformer KV caches have strong positional structure (RoPE, ALiBi, etc.) that creates systematic patterns in key vectors. Does $\beta$-refit implicitly handle positional effects, or does it require explicit guardrails? Likely depends on the regime (short vs. long contexts). Can be probed by comparing refit quality across position ranges.
+
+### 7.2 Longer-term theory questions
+
+These require more infrastructure or formalism before they can be properly tested.
 
 **Q3. Tree compatibility.** Can compressed representations be organized into a tree or hierarchy such that the concatenation property allows efficient multi-scale merging? The additive structure of $Z$ and $N$ suggests yes, but the approximation error under successive merges needs to be controlled. Open.
 
 **Q4. Approximate submodularity.** Is the problem of selecting a support set of size $m$ to minimize $L_{\text{true}}$ (or $L_{\text{lin}}$) approximately submodular? If so, greedy selection has known approximation guarantees. The ratio structure of $L_{\text{true}}$ makes this non-obvious; $L_{\text{lin}}$ may be more tractable since it decomposes into two quadratics.
-
-**Q5. Positional structure.** Transformer KV caches have strong positional structure (RoPE, ALiBi, etc.) that creates systematic patterns in the key vectors. Can this structure be exploited in the support selection or $\beta$-fit step? How does positional encoding interact with the inner product $\langle q, k_i \rangle$ in the N/Z formulation? Open and likely practically important.
 
 **Q6. Merge and synthetic support generation.** Given two groups of KV pairs, can we construct a single merged support point $(\hat{k}, \hat{v})$ with coefficient $\hat{\beta}$ that approximates their combined contribution to $Z$ and $N$? This is related to exponential family moment matching. Formal conditions under which a good merge exists are not yet worked out.
