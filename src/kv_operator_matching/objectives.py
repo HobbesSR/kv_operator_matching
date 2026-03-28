@@ -15,7 +15,12 @@ For the compact representation, beta_j are fit coefficients.
 Surrogate objectives (all functions of beta for fixed support):
   L_Z   = sum_t w_t * (Z_hat(q_t) - Z_ref(q_t))^2
   L_N   = sum_t w_t * ||N_hat(q_t) - N_ref(q_t)||^2
-  L_lin = L_Z + L_N  (jointly convex quadratic in beta)
+  L_lin = L_Z + (1/d_v) * L_N  (normalized; see loss_lin docstring)
+
+Note on normalization: L_Z is scalar per query; L_N accumulates squared
+error over d_v value dimensions. Without normalization, L_N dominates by
+a factor of d_v (typically 64-128), making L_lin essentially ignore L_Z.
+The default normalized form L_Z + L_N/d_v equalizes their contribution.
 
 True response error:
   L_true = sum_t w_t * ||A_hat(q_t) - A_ref(q_t)||^2
@@ -208,12 +213,19 @@ def loss_lin(
     keys_ref: Tensor,
     values_ref: Tensor,
     betas_ref: Optional[Tensor] = None,
+    normalize: bool = True,
 ) -> Tensor:
-    """Compute the combined linear surrogate L_lin = L_Z + L_N.
+    """Compute the combined linear surrogate L_lin = L_Z + (1/d_v) * L_N.
 
     This is the primary fitting objective for fixed-support beta-refit.
     It is convex and quadratic in betas_hat for fixed support (keys_hat,
     values_hat), making it solvable as an NNLS problem.
+
+    Normalization: L_Z is scalar-valued per query; L_N accumulates squared
+    error over d_v value dimensions. Without normalization, L_N dominates by
+    a factor of d_v (typically 64-128). When normalize=True (default), L_N
+    is divided by d_v so that both terms contribute at comparable scale.
+    Set normalize=False only for debugging or if you want the raw sum.
 
     Args:
         queries: Query bank tensor, shape (n_queries, d_k).
@@ -224,14 +236,18 @@ def loss_lin(
         keys_ref: Keys for reference cache, shape (n, d_k).
         values_ref: Values for reference cache, shape (n, d_v).
         betas_ref: Optional betas for reference cache.
+        normalize: If True (default), divide L_N by d_v before summing.
 
     Returns:
-        Scalar loss tensor equal to L_Z + L_N.
+        Scalar loss tensor equal to L_Z + L_N (optionally normalized).
     """
     lz = loss_z(queries, weights, keys_hat, betas_hat, keys_ref, betas_ref)
     ln = loss_n(
         queries, weights, keys_hat, values_hat, betas_hat, keys_ref, values_ref, betas_ref
     )
+    if normalize:
+        d_v = values_hat.shape[-1]
+        ln = ln / d_v
     return lz + ln
 
 

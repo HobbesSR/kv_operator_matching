@@ -36,6 +36,16 @@ class QueryBankConfig:
 class BetaFitConfig:
     """Configuration for the fixed-support beta coefficient fitting step.
 
+    Phase 1a (current default): beta-only refit. A single scalar beta_j
+    scales both the mass contribution (Z) and the value contribution (N)
+    of each support point. Simple, convex, and theorem-friendly, but more
+    restricted than the paper's full (Ck, beta, Cv) decomposition.
+
+    Phase 1b (planned): value refit. With fit_values=True, after fitting
+    beta, compact values are refit via least squares on the output matching
+    objective (paper-style sequential fit). This recovers the full
+    expressivity of the paper's fixed-support regime.
+
     Attributes:
         support_size: Number of support points m in the compact representation.
         max_iter: Maximum iterations for the NNLS / projected gradient solver.
@@ -44,8 +54,17 @@ class BetaFitConfig:
             allow negative betas (unconstrained least squares — generally
             not recommended since it can produce non-physical results).
         surrogate: Which surrogate loss to minimize during fitting.
-            - "lin": L_lin = L_Z + L_N (convex quadratic in beta; default)
+            - "lin": L_Z + (1/d_v)*L_N (convex quadratic in beta; default)
             - "true_response": L_true response error (non-convex; expensive)
+        normalize_lin: If True, divide L_N by d_v in L_lin to equalize
+            the per-dimension scale of Z and N terms. Should be True
+            unless debugging. Ignored when surrogate != "lin".
+        fit_values: If True, run a separate least-squares value refit step
+            after beta fitting (Phase 1b / paper-style). Not yet implemented;
+            present as a flag to make the design space explicit.
+        ridge: Small ridge regularization added to the NNLS diagonal for
+            numerical stability when the feature matrix is ill-conditioned.
+            Set to 0.0 to disable.
     """
 
     support_size: int = 64
@@ -53,6 +72,9 @@ class BetaFitConfig:
     tol: float = 1e-6
     nonneg: bool = True
     surrogate: str = "lin"  # options: lin, true_response
+    normalize_lin: bool = True
+    fit_values: bool = False  # Phase 1b; not yet implemented
+    ridge: float = 1e-4
 
 
 @dataclass

@@ -28,6 +28,8 @@ Note: $Z_\mu$ is a scalar-valued function of $q$; $N_\mu$ and $A_\mu$ are $\math
 
 In standard scaled-dot-product attention with softmax, $A_\mu(q)$ is exactly the output of a single head given query $q$ and KV cache $\mu$ (before projection), up to the $1/\sqrt{d}$ scaling (absorbed into $q$ without loss of generality).
 
+**Note on positional encodings**: in RoPE-encoded models (including Qwen 2), each cached key $k_i$ already carries a position-dependent phase from rotary embedding applied before caching. The formulation above operates on these already-encoded keys; the inner product $\langle q, k_i \rangle$ is the actual inner product used at inference time. The N/Z framing does not abstract away or re-solve positional structure — it inherits whatever positional encoding is baked into the cached keys. See Section 8 for the design implication.
+
 ---
 
 ## 2. Operator Approximation Objective
@@ -76,11 +78,15 @@ $$L_Z^{\log} = \sum_t w_t \left( \log Z_{\hat{\mu}}(q_t) - \log Z_\mu(q_t) \righ
 
 $$L_N = \sum_t w_t \| N_{\hat{\mu}}(q_t) - N_\mu(q_t) \|_2^2$$
 
-**Combined linear surrogate**:
+**Combined linear surrogate** (normalized):
 
-$$L_{\text{lin}} = L_Z + L_N$$
+$$L_{\text{lin}} = L_Z + \frac{1}{d_v} L_N$$
+
+**Why normalize**: $L_Z$ is scalar-valued per query; $L_N$ accumulates squared error over $d_v$ value dimensions. Without normalization, $L_N$ dominates by a factor of $d_v$ (typically 64–128), and $L_{\text{lin}}$ effectively ignores $Z$ matching. Dividing $L_N$ by $d_v$ equalizes the per-dimension contribution of each term. An alternative is per-query relative normalization (dividing each query's contribution by its baseline magnitude), which is scale-invariant but less stable when magnitudes are near zero.
 
 **Practical approach**: optimize $L_{\text{lin}}$ (tractable), verify on $\hat{L}_{\text{true}}$ (used only at checkpoints). The surrogate is a reasonable approximation to $\hat{L}_{\text{true}}$ when denominator mismatch is small: if $Z_{\hat{\mu}}(q) \approx Z_\mu(q)$, then $A_{\hat{\mu}} = N_{\hat{\mu}} / Z_{\hat{\mu}} \approx N_{\hat{\mu}} / Z_\mu$, so $L_N$ controls response error up to second-order denominator terms. No formal bound is claimed here.
+
+**Surrogate quality in the poorly-initialized regime**: when initialization is weak (e.g., random support), denominator mismatch can be large and $L_{\text{lin}}$ is not a reliable proxy for $\hat{L}_{\text{true}}$. Pathologically, it is possible to reduce $L_Z$ and $L_N$ independently while the induced $A_{\hat{\mu}} = N_{\hat{\mu}} / Z_{\hat{\mu}}$ remains poor. The right response is not to avoid the surrogate — it is still the best cheap fitting target — but to treat verification as mandatory rather than optional. Use $L_{\text{lin}}$ for local refinement around a not-awful support; do not expect it to rescue a badly initialized representation.
 
 ---
 
@@ -179,6 +185,25 @@ With the nonnegativity constraint $\beta \geq 0$, this is a **nonnegative least 
 
 **This is theorem-friendly**: fixed-support $\beta$-refit under $L_{\text{lin}}$ is a convex NNLS problem (with optional ridge). The $\hat{L}_{\text{true}}$ objective is not convex in $\beta$ in general, but can be used for held-out verification after fitting.
 
+### Three fixed-support regimes
+
+The fixed-support family spans a range from simple to expressive. These are distinct regimes with different implementation complexity and different comparison value:
+
+**Phase 1a — $\beta$-only refit** (current default):
+A single scalar $\beta_j \geq 0$ per support point. Both $Z_{\hat{\mu}}$ and $N_{\hat{\mu}}$ are scaled by the same $\beta_j$, so the mass and value contributions of each atom cannot be adjusted independently. Convex NNLS. The simplest theorem-friendly baseline.
+
+*Limitation*: if a support key is well-placed in key-space but its value vector is poor, $\beta$-only cannot fix the value — it can only down-weight the whole atom. This constrains how much the refit can improve over raw selection.
+
+**Phase 1b — paper-style sequential fit** (planned):
+Fit $\beta$ via NNLS on $L_Z$ alone (mass matching), then fit compact values $\hat{v}_j$ via ordinary least squares on the output matching objective with $\beta$ fixed. Identical structure to the Attention Matching paper's Section 3.2. More expressive than $\beta$-only because value vectors can be adjusted independently of mass.
+
+*When to use*: when $\beta$-only refit leaves response error high despite good Z-matching, suggesting value direction is the bottleneck.
+
+**Phase 1c — joint or alternating $\beta$ + value fit** (future):
+Alternate between NNLS on $\beta$ and LS on $\hat{v}$ until convergence, or minimize $L_{\text{lin}}$ jointly over $(\beta, \hat{v})$. More expressive but also more sensitive to local optima in the alternating case. Not needed until Phases 1a and 1b are characterized.
+
+The implementation exposes `fit_values: bool` in `BetaFitConfig` to signal which regime is active. Phase 1a is the current implementation; Phase 1b is the planned near-term extension.
+
 ### Relationship to the paper's two-step fit
 
 The paper (Section 3.2) decomposes the fixed-support fit differently:
@@ -266,6 +291,8 @@ This section states the boundary honestly.
 **Evidence that the operator is actually compressible.** Algebraic admissibility of progressive representations is not the same as empirical viability. Whether $A_\mu$ under realistic query distributions is sparse enough for aggressive compaction is an empirical question (Q1). The progressive/tree direction is only justified if Phases 2–3 show meaningful compressibility at modest support sizes.
 
 **A policy for dynamic resolution.** Even if good merged atoms exist and the operator is compressible, deciding *when* to recompact, *how many* tiers to maintain, and *which resolution to serve under inference pressure* requires a policy layer that is entirely outside the current scope.
+
+**A solution to positional encoding.** The formulation operates on already-encoded keys — in RoPE models, $k_i$ carries its original position phase. Future queries arrive with a different phase. The Attention Matching paper addresses this by preserving logical KV length (so future tokens receive the correct position IDs relative to the compacted prefix). The N/Z framing inherits this requirement: it does not abstract away positional structure, and the concatenation property algebra assumes the key vectors are the objects actually used at inference time. For the Qwen 2 experiment, the design decision is: store support keys as already-encoded cached keys, and preserve logical cache length in the compacted representation. Positional reindexing or synthetic phase design is not part of this repo's scope.
 
 **The approximation error bound under successive merges.** The concatenation property is exact. But approximation error introduced at one level of a merge hierarchy may compound across levels. Controlling this is a distinct open problem (Q3).
 
