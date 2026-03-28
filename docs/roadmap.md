@@ -75,7 +75,7 @@ High-level direction:
 - **Dynamic resolution policy**: decide at each checkpoint whether to refit, which resolution to use, and how to trade off memory vs. accuracy — based on live query evidence
 - **Learned router**: a small model that predicts the best resolution given context signals
 
-Why this is Phase 4 and not earlier: the progressive representation requires the concatenation property to be reliably exploited, which requires Phase 2-3 to establish that the N/Z surrogate fits work well enough to trust in a streaming setting. The dynamic policy requires empirical data on how often refitting is needed and how much it helps, which requires Phase 2 experiments.
+Why this is Phase 4 and not earlier: the N/Z formalism is already *algebraically compatible* with progressive and tree-structured representations — the concatenation property and the admissible representation class both support it (see `docs/theory_sketch.md` Section 8). What Phase 4 requires that the current formalism does not yet supply is (a) a construction rule for merged or synthetic atoms, (b) empirical evidence that the operator is compressible enough to justify hierarchy, and (c) a policy for dynamic resolution. Phases 2-3 must answer (a) and (b) before Phase 4 is worth designing in detail.
 
 ---
 

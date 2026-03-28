@@ -242,3 +242,33 @@ These require more infrastructure or formalism before they can be properly teste
 **Q4. Approximate submodularity.** Is the problem of selecting a support set of size $m$ to minimize $L_{\text{true}}$ (or $L_{\text{lin}}$) approximately submodular? If so, greedy selection has known approximation guarantees. The ratio structure of $L_{\text{true}}$ makes this non-obvious; $L_{\text{lin}}$ may be more tractable since it decomposes into two quadratics.
 
 **Q6. Merge and synthetic support generation.** Given two groups of KV pairs, can we construct a single merged support point $(\hat{k}, \hat{v})$ with coefficient $\hat{\beta}$ that approximates their combined contribution to $Z$ and $N$? This is related to exponential family moment matching. Formal conditions under which a good merge exists are not yet worked out.
+
+---
+
+## 8. What This Framing Does and Does Not Give You
+
+This section states the boundary honestly.
+
+### What the current formalism gives you
+
+**Algebraic compatibility with progressive and tree-structured representations.** The representation $\hat{\mu} = \sum_j \beta_j \delta_{(\hat{k}_j, \hat{v}_j)}$ places no restriction on where $(\hat{k}_j, \hat{v}_j)$ come from. They do not have to be original KV pairs. Merged atoms, synthetic atoms, and residual correction terms are all admissible within the same objective. The formalism does not need to change to accommodate them.
+
+**Compositionality via the concatenation property.** Since $Z$ and $N$ add over disjoint blocks (Section 4), a compact approximation of a past block is transparently composable with any exact future block. This is the property that makes a progressive or hierarchical representation plausible in a streaming setting: approximation error in the past does not grow with future tokens, it persists at the level it was when the compaction was applied.
+
+**A clear optimization target at each level.** $L_{\text{lin}}$ is defined in terms of $Z$ and $N$, not in terms of token counts, positions, or layer indices. A merged atom or residual tier can be evaluated against the same objective as a retained token. This means Phase 1 experiments directly measure what Phase 3–4 extensions will need to improve on.
+
+**Headroom.** Phase 1 (fixed-support NNLS on live query evidence) is not a dead end. It is the conservative end of a range of representations that all live inside the same objective framework. The decision to move from retained-subset support to merged or synthetic support is a decision about the admissible representation class, not a change in the objective.
+
+### What the current formalism does not yet give you
+
+**A construction rule for merged or synthetic atoms.** Knowing that $(\hat{k}_j, \hat{v}_j)$ can be a merged object is not the same as knowing how to construct a good one. The merge question (Q6 above) is open: under what conditions does a single merged atom approximate two groups of KV pairs well under $L_{\text{lin}}$? This requires either a closed-form answer (related to exponential family moment matching) or an empirical search procedure.
+
+**Evidence that the operator is actually compressible.** Algebraic admissibility of progressive representations is not the same as empirical viability. Whether $A_\mu$ under realistic query distributions is sparse enough for aggressive compaction is an empirical question (Q1). The progressive/tree direction is only justified if Phases 2–3 show meaningful compressibility at modest support sizes.
+
+**A policy for dynamic resolution.** Even if good merged atoms exist and the operator is compressible, deciding *when* to recompact, *how many* tiers to maintain, and *which resolution to serve under inference pressure* requires a policy layer that is entirely outside the current scope.
+
+**The approximation error bound under successive merges.** The concatenation property is exact. But approximation error introduced at one level of a merge hierarchy may compound across levels. Controlling this is a distinct open problem (Q3).
+
+### Summary
+
+The current formalism is the right mathematical envelope for the progressive direction. It gives algebraic headroom and a consistent objective at all levels of a potential hierarchy. What it does not give — and what Phases 2–4 must supply — is the construction rule for merged atoms, empirical evidence of compressibility, and a policy for dynamic resolution. Phase 1 is not a commitment to staying in the fixed-subset regime; it is a commitment to establishing the baseline before lifting the representation class.
