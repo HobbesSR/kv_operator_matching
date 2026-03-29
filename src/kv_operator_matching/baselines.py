@@ -15,6 +15,8 @@ TODO (for each baseline): wire up beta-refit in the experiment pipeline
 """
 from __future__ import annotations
 
+import math
+
 import torch
 
 from .objectives import compute_logits
@@ -111,6 +113,105 @@ def attention_mass_baseline(
         support_values=support_values,
         betas=betas,
     )
+
+
+def omp_mass_baseline(
+    head_state: HeadState,
+    query_bank: QueryBank,
+    budget: int,
+) -> CompactRepresentation:
+    """Select support with local OMP over the query-conditioned mass frame.
+
+    This is the closest local analogue to the paper's AM-OMP selector available
+    in this repo today. It greedily selects keys to match the reference
+    partition-function frame over the query bank, jointly producing a support
+    and nonnegative beta coefficients.
+
+    The support values are copied from the underlying KV cache; value fitting is
+    a separate downstream step.
+    """
+    queries, weights = query_bank.get_weighted_bank()
+    keys = head_state.keys
+    values = head_state.values
+    n = keys.shape[0]
+    m = min(budget, n)
+    if m <= 0:
+        return CompactRepresentation(
+            support_keys=keys[:0],
+            support_values=values[:0],
+            betas=torch.ones(0, dtype=keys.dtype, device=keys.device),
+        )
+
+    queries_f = queries.float()
+    keys_f = keys.float()
+    weights_f = weights.float()
+
+    selected_indices, selected_betas = _select_keys_with_omp(
+        key_tensor=keys_f,
+        query_tensor=queries_f,
+        entry_weights=weights_f,
+        selection_budget=m,
+    )
+    if not selected_indices:
+        return attention_mass_baseline(head_state, query_bank, budget)
+
+    index_tensor = torch.tensor(selected_indices, device=keys.device, dtype=torch.long)
+    support_keys = keys[index_tensor]
+    support_values = values[index_tensor]
+    betas = torch.tensor(selected_betas, dtype=keys.dtype, device=keys.device)
+    return CompactRepresentation(
+        support_keys=support_keys,
+        support_values=support_values,
+        betas=betas,
+    )
+
+
+def _select_keys_with_omp(
+    *,
+    key_tensor: torch.Tensor,
+    query_tensor: torch.Tensor,
+    entry_weights: torch.Tensor,
+    selection_budget: int,
+) -> tuple[list[int], list[float]]:
+    """Greedy OMP-like support selection on the stable exp-logit mass frame."""
+    if selection_budget <= 0 or key_tensor.numel() == 0 or query_tensor.numel() == 0:
+        return [], []
+
+    inv_sqrt_d = 1.0 / math.sqrt(max(int(query_tensor.shape[1]), 1))
+    logits = (query_tensor @ key_tensor.T) * inv_sqrt_d
+    reference_max = logits.max(dim=1, keepdim=True).values
+    exp_scores = torch.exp(logits - reference_max)
+    target = exp_scores.sum(dim=1)
+    row_weights = torch.sqrt(torch.clamp_min(entry_weights.to(dtype=torch.float32), 0.0))
+    weighted_design = exp_scores * row_weights.unsqueeze(1)
+    weighted_target = target * row_weights
+
+    selected_indices: list[int] = []
+    mask = torch.zeros(weighted_design.shape[1], dtype=torch.bool, device=weighted_design.device)
+    current = torch.zeros_like(weighted_target)
+    scale = None
+
+    for _ in range(min(int(selection_budget), int(weighted_design.shape[1]))):
+        residual = weighted_target - current
+        corr = torch.matmul(weighted_design.T, residual)
+        corr[mask] = -float("inf")
+        index = int(torch.argmax(corr).item())
+        if not math.isfinite(float(corr[index].item())):
+            break
+        selected_indices.append(index)
+        mask[index] = True
+        selected_design = weighted_design[:, selected_indices]
+        scale = torch.linalg.lstsq(
+            selected_design,
+            weighted_target.unsqueeze(1),
+            driver="gels",
+        ).solution.squeeze(1)
+        scale = scale.clamp_min(1e-12)
+        current = selected_design @ scale
+
+    if scale is None:
+        return [], []
+    return selected_indices, [float(value) for value in scale.tolist()]
 
 
 def uniform_baseline(head_state: HeadState, budget: int) -> CompactRepresentation:

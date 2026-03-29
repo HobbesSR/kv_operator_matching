@@ -19,6 +19,8 @@ Methods compared:
   attn_mass+refit - attn_mass support, NNLS beta-refit
   attn_mass+vfit  - attn_mass support, anchored value-only refit
   attn_mass+phase1b - attn_mass support, safe sequential mass beta-fit then value refit
+  omp             - OMP-selected support with fitted beta coefficients
+  omp+vfit        - OMP support+beta with anchored value-only refit
   uniform         - random selection, betas=1 (sanity check)
 
 Metrics reported per (layer, kv_head, budget):
@@ -53,6 +55,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from kv_operator_matching.baselines import (
     attention_mass_baseline,
+    omp_mass_baseline,
     recency_baseline,
     uniform_baseline,
 )
@@ -835,6 +838,15 @@ def run_methods(
     rec("attn_mass+phase1b", rep_p, t0)
     add_refit_diag("attn_mass+phase1b", rep, rep_p)
 
+    t0 = time.time()
+    rep = omp_mass_baseline(head_state, train_qbank, budget)
+    rec("omp", rep, t0)
+
+    t0 = time.time()
+    rep_v = refit_values(rep, head_state.keys, head_state.values, train_qbank, beta_cfg)
+    rec("omp+vfit", rep_v, t0)
+    add_refit_diag("omp+vfit", rep, rep_v)
+
     if mode == "full":
         t0 = time.time()
         rep = uniform_baseline(head_state, budget)
@@ -856,6 +868,8 @@ FULL_METHODS = [
     "attn_mass+refit",
     "attn_mass+vfit",
     "attn_mass+phase1b",
+    "omp",
+    "omp+vfit",
     "uniform",
 ]
 FOCUSED_METHODS = [
@@ -863,6 +877,8 @@ FOCUSED_METHODS = [
     "attn_mass+refit",
     "attn_mass+vfit",
     "attn_mass+phase1b",
+    "omp",
+    "omp+vfit",
 ]
 MW = max(len(m) for m in FULL_METHODS) + 2
 

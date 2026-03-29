@@ -92,6 +92,8 @@ Artifacts from tonight:
 - [collection_mode_comparison_substantive_q256_t32.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/collection_mode_comparison_substantive_q256_t32.json)
 - [collection_mode_comparison_substantive_q512_t64.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/collection_mode_comparison_substantive_q512_t64.json)
 - [forensic_support_geometry_q512_t64.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/forensic_support_geometry_q512_t64.json)
+- [collection_mode_comparison_with_omp_q256_t32.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/collection_mode_comparison_with_omp_q256_t32.json)
+- [collection_mode_comparison_with_omp_q512_t64_l420.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/collection_mode_comparison_with_omp_q512_t64_l420.json)
 
 ---
 
@@ -276,3 +278,50 @@ The current best explanation is therefore:
   decode-like evidence
 - `attn_mass` may be a good replay selector, but it looks too dispersed and
   heterogeneous to serve as a stable local repair basis in the same regime
+
+### OMP Control
+
+We added a local per-head OMP support selector as a closer control for the
+paper's AM-OMP recipe. In this repo, the closest current analogue is:
+
+- `omp`: OMP-selected support with fitted beta coefficients
+- `omp+vfit`: OMP support+beta followed by anchored value repair
+
+Results on the substantive `q256 / t32` sweep:
+
+- `omp+vfit` is a real positive relative to its own baseline in every regime:
+  - `online`: mean holdout `ΔL_true = -3.35`, improved `54/64`
+  - `teacher-forced`: `-4.17`, improved `59/64`
+  - `repeat-prefill`: `-2.93`, improved `58/64`
+
+But the absolute ranking is more nuanced:
+
+- `omp+vfit` beats `recency+vfit` under:
+  - `teacher-forced`: `45/64` cells, mean absolute `L_true` difference `-1.10`
+  - `repeat-prefill`: `55/64` cells, mean difference `-1.85`
+- `omp+vfit` loses to `recency+vfit` under:
+  - `online`: `27/64` cells, mean difference `+0.53`
+
+At the same time, the OMP family still trails the attention-mass family in
+absolute `L_true`:
+
+- `omp` baseline is much worse than `attn_mass` baseline in every regime.
+- `omp+vfit` still loses to `attn_mass+vfit` in absolute `L_true` on the
+  current matrices, even though `attn_mass+vfit` often harms relative to the
+  stronger `attn_mass` baseline.
+
+The reduced dense OMP check (`layers = 4, 20`, `q512 / t64`) tells the same
+story:
+
+- `omp+vfit` stays strongly positive relative to `omp` in every regime.
+- It still beats `recency+vfit` under `teacher-forced` and `repeat-prefill`,
+  but not under `online`.
+- It still does not beat `attn_mass+vfit` in absolute `L_true`.
+
+So the OMP control changes the picture, but not all the way:
+
+- OMP helps enough to narrow the gap with the recency family and even win in
+  richer evidence regimes.
+- OMP does not rescue the whole attention-matching direction on the current
+  local mechanistic surface, because the absolute `attn_mass` baselines remain
+  much stronger and the online regime still favors `recency+vfit`.
