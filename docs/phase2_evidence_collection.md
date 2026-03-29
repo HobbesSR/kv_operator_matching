@@ -91,6 +91,7 @@ Artifacts from tonight:
 - [collection_mode_comparison_with_teacher_forced.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/collection_mode_comparison_with_teacher_forced.json)
 - [collection_mode_comparison_substantive_q256_t32.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/collection_mode_comparison_substantive_q256_t32.json)
 - [collection_mode_comparison_substantive_q512_t64.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/collection_mode_comparison_substantive_q512_t64.json)
+- [forensic_support_geometry_q512_t64.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/forensic_support_geometry_q512_t64.json)
 
 ---
 
@@ -239,3 +240,39 @@ Layer-pattern note from the denser sweep:
     every tested `teacher-forced` layer, with the worst mean deltas at layer 28
   - `attn_mass+phase1b` is uniformly harmful across all tested `online` layers
     and nearly so under `teacher-forced`
+
+### Support-Geometry Forensics
+
+The comparative geometry pass on the dense substantive setup supports the
+"repair substrate" hypothesis directly.
+
+- `recency` supports are much more local and coherent:
+  - mean support age fraction is about `0.19` in every regime
+  - support span fraction is about `0.37`
+  - adjacency fraction is exactly `1.0`
+- `attn_mass` supports are older and nearly full-span:
+  - mean support age fraction is about `0.36` online, `0.42` teacher-forced,
+    and `0.47` repeat-prefill
+  - support span fraction is effectively `1.0`
+  - adjacency fraction is only about `0.48-0.61`
+
+- `recency` also yields much healthier design geometry under decode-like
+  regimes:
+  - mean stable rank is `7.11` online and `6.81` teacher-forced
+  - for `attn_mass`, it is only `4.21` online and `3.96` teacher-forced
+
+- The value updates themselves are not smaller on `recency`; if anything they
+  are slightly larger on average. The difference is therefore not "recency
+  changes less." The difference is that the same anchored update lands on a
+  more coherent support.
+
+- Post-repair error concentration is lower on `recency`:
+  - holdout top-5 error share is `0.136` online and `0.105` teacher-forced
+  - for `attn_mass`, it is `0.199` online and `0.192` teacher-forced
+
+The current best explanation is therefore:
+
+- `recency` is a better substrate for anchored local value repair under
+  decode-like evidence
+- `attn_mass` may be a good replay selector, but it looks too dispersed and
+  heterogeneous to serve as a stable local repair basis in the same regime
