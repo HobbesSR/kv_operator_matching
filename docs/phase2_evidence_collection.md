@@ -94,6 +94,7 @@ Artifacts from tonight:
 - [forensic_support_geometry_q512_t64.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/forensic_support_geometry_q512_t64.json)
 - [collection_mode_comparison_with_omp_q256_t32.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/collection_mode_comparison_with_omp_q256_t32.json)
 - [collection_mode_comparison_with_omp_q512_t64_l420.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/collection_mode_comparison_with_omp_q512_t64_l420.json)
+- [forensic_support_geometry_with_omp_q256_t32.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/forensic_support_geometry_with_omp_q256_t32.json)
 
 ---
 
@@ -325,3 +326,50 @@ So the OMP control changes the picture, but not all the way:
 - OMP does not rescue the whole attention-matching direction on the current
   local mechanistic surface, because the absolute `attn_mass` baselines remain
   much stronger and the online regime still favors `recency+vfit`.
+
+### OMP vs Recency Geometry
+
+The follow-up geometry pass clarifies *why* OMP beats recency in richer regimes
+but still loses online.
+
+- OMP does **not** look like the more stable local repair substrate:
+  - its supports are older and nearly full-span
+  - its adjacency fraction is much lower than recency
+  - its design stable rank is lower than recency in all three regimes
+  - its low-singular-direction update share is higher than recency in all
+    three regimes
+
+On the broad `q256 / t32` surface:
+
+- `online`
+  - `recency` baseline mean holdout `L_true = 7.74`
+  - `omp` baseline mean holdout `L_true = 8.87`
+  - `recency+vfit` ends at `4.98`
+  - `omp+vfit` ends at `5.52`
+
+- `teacher-forced`
+  - `recency` baseline mean holdout `L_true = 12.64`
+  - `omp` baseline mean holdout `L_true = 9.80`
+  - `recency+vfit` ends at `6.74`
+  - `omp+vfit` ends at `5.63`
+
+- `repeat-prefill`
+  - `recency` baseline mean holdout `L_true = 16.25`
+  - `omp` baseline mean holdout `L_true = 12.85`
+  - `recency+vfit` ends at `11.51`
+  - `omp+vfit` ends at `9.75`
+
+So the richer-regime OMP win is mostly a **baseline-quality win**, not a
+"better-conditioned repair substrate" win:
+
+- under `teacher-forced` and `repeat-prefill`, OMP starts from a much better
+  baseline than recency, and value repair preserves that advantage
+- under true `online`, recency starts from the better baseline and keeps the
+  lead even though OMP's value-repair delta is slightly larger
+
+The current best explanation is therefore:
+
+- `recency` remains the more coherent local value-repair substrate
+- `OMP` becomes competitive or better only when the richer evidence regime
+  makes its stronger baseline support quality matter more than its weaker local
+  geometry

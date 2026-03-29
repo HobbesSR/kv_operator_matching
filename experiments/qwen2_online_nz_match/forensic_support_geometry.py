@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Comparative geometry / repair forensics for recency+vfit versus attn_mass+vfit.
+Comparative geometry / repair forensics for recency, attn_mass, and OMP supports.
 
 This script is meant to explain the Phase 2 result that anchored value repair
-works well on recency supports under decode-like evidence but remains weak on
-attention-mass supports outside supervision-rich control regimes.
+works well on recency supports under decode-like evidence, improves under OMP
+in richer regimes, and remains weak on attention-mass supports outside
+supervision-rich control regimes.
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ import torch
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from kv_operator_matching.baselines import attention_mass_baseline, recency_baseline
+from kv_operator_matching.baselines import attention_mass_baseline, omp_mass_baseline, recency_baseline
 from kv_operator_matching.config import BetaFitConfig
 from kv_operator_matching.objectives import compute_logits, compute_response, compute_z, loss_n
 from kv_operator_matching.query_bank import QueryBank
@@ -94,6 +95,11 @@ def parse_args():
     p.add_argument("--max-new-tokens", type=int, default=64)
     p.add_argument("--prefill-chunk-size", type=int, default=64)
     p.add_argument("--train-fraction", type=float, default=0.5)
+    p.add_argument(
+        "--support-methods",
+        nargs="+",
+        default=["recency", "attn_mass", "omp"],
+    )
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--save-json", default="results/scratch/forensic_support_geometry.json")
     return p.parse_args()
@@ -299,11 +305,15 @@ def main():
 
                     for frac in args.budgets:
                         budget = max(1, int(seq_len * frac))
-                        for support_method in ("recency", "attn_mass"):
+                        for support_method in args.support_methods:
                             if support_method == "recency":
                                 base_rep = recency_baseline(head_state, budget)
-                            else:
+                            elif support_method == "attn_mass":
                                 base_rep = attention_mass_baseline(head_state, train_qbank, budget)
+                            elif support_method == "omp":
+                                base_rep = omp_mass_baseline(head_state, train_qbank, budget)
+                            else:
+                                raise ValueError(f"Unsupported support method: {support_method}")
 
                             vfit_rep = refit_values(base_rep, keys, values, train_qbank, beta_cfg)
                             train_queries, train_weights = train_qbank.get_weighted_bank()
