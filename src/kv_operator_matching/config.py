@@ -55,6 +55,7 @@ class BetaFitConfig:
             not recommended since it can produce non-physical results).
         surrogate: Which surrogate loss to minimize during fitting.
             - "lin": L_Z + (1/d_v)*L_N (convex quadratic in beta; default)
+            - "mass": L_Z-style mass-only fit for paper-style sequential Phase 1b
             - "true_response": L_true response error (non-convex; expensive)
         normalize_lin: If True, divide L_N by d_v in L_lin to equalize
             the per-dimension scale of Z and N terms. Should be True
@@ -65,16 +66,25 @@ class BetaFitConfig:
         ridge: Small ridge regularization added to the NNLS diagonal for
             numerical stability when the feature matrix is ill-conditioned.
             Set to 0.0 to disable.
+        value_ridge: Ridge regularization used in the Phase 1b value least
+            squares solve. Scaled relative to the design diagonal.
+        value_interpolation: Interpolation factor between original support
+            values and fitted values in Phase 1b. 1.0 uses the fitted values
+            directly; smaller values anchor the update toward the original
+            values and suppress weak-direction drift.
     """
 
     support_size: int = 64
-    max_iter: int = 200
+    max_iter: int = 0  # 0 = use scipy default (3*m); set positive to override
     tol: float = 1e-6
     nonneg: bool = True
-    surrogate: str = "lin"  # options: lin, true_response
+    surrogate: str = "lin"  # options: lin, mass, true_response
     normalize_lin: bool = True
-    fit_values: bool = False  # Phase 1b; not yet implemented
+    fit_values: bool = False  # Phase 1b sequential value fit
     ridge: float = 1e-4
+    value_ridge: float = 1.0
+    value_interpolation: float = 0.5
+    max_fit_queries: int = 128  # max queries for NNLS; 0 = use all (slow for large banks)
 
 
 @dataclass

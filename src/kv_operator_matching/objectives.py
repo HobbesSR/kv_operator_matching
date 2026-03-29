@@ -13,9 +13,23 @@ For the reference (full) cache, beta_i = 1 for all i.
 For the compact representation, beta_j are fit coefficients.
 
 Surrogate objectives (all functions of beta for fixed support):
-  L_Z   = sum_t w_t * (Z_hat(q_t) - Z_ref(q_t))^2
-  L_N   = sum_t w_t * ||N_hat(q_t) - N_ref(q_t)||^2
+  L_Z   = sum_t w_t * (log Z_hat(q_t) - log Z_ref(q_t))^2   [log-scale]
+  L_N   = sum_t w_t * ||N_hat(q_t) - N_ref(q_t)||^2          [NOTE: see below]
   L_lin = L_Z + (1/d_v) * L_N  (normalized; see loss_lin docstring)
+
+Note on compute_z / L_Z: compute_z returns log Z (logsumexp), not Z itself,
+to avoid float32 overflow when inner products are large (|<q,k>| > ~80).
+L_Z is therefore a log-scale mass error: (log Z_hat - log Z_ref)^2.
+This is numerically stable and interpretable as a relative log-mass error.
+
+Note on compute_n / L_N: compute_n returns the stable pre-scale numerator
+(without restoring the exp(max_logit) scale factor). This is suitable for
+computing L_N when both hat and ref are shifted by the same per-query max.
+The raw absolute N values overflow float32 for large inner products.
+
+Note on L_lin in beta_fit.py: the NNLS construction uses a global per-query
+max normalization (different from compute_z/compute_n) to build numerically
+stable feature matrices. The stable NNLS construction is self-consistent.
 
 Note on normalization: L_Z is scalar per query; L_N accumulates squared
 error over d_v value dimensions. Without normalization, L_N dominates by
@@ -34,6 +48,21 @@ from typing import Optional
 
 import torch
 from torch import Tensor
+
+
+def compute_logits(
+    queries: Tensor,
+    keys: Tensor,
+) -> Tensor:
+    """Compute scaled attention logits <q, k> / sqrt(d_k).
+
+    This matches the actual attention kernel used by transformer attention.
+    All support selection, fitting, and evaluation code should use the same
+    scaled logits so the experiment is self-consistent.
+    """
+    logits = queries @ keys.T
+    scale = queries.shape[-1] ** -0.5
+    return logits * scale
 
 
 def compute_z(
@@ -63,7 +92,7 @@ def compute_z(
         Tensor of shape (n_queries,) with Z_mu(q) for each query.
     """
     # logits[q, i] = <q_q, k_i>
-    logits = queries @ keys.T  # (n_queries, n_keys)
+    logits = compute_logits(queries, keys)  # (n_queries, n_keys)
 
     # Numerically stable: subtract per-query max
     max_logits = logits.max(dim=-1, keepdim=True).values
@@ -72,8 +101,11 @@ def compute_z(
     if betas is not None:
         exp_logits = exp_logits * betas.unsqueeze(0)  # broadcast over queries
 
-    z = exp_logits.sum(dim=-1) * max_logits.squeeze(-1).exp()  # restore scale
-    return z  # (n_queries,)
+    # Return log Z (= logsumexp) to avoid float32 overflow when inner products are large.
+    # log Z_mu(q) = max_logit + log(sum_i beta_i * exp(logit_i - max_logit))
+    z_stable = exp_logits.sum(dim=-1)   # sum of beta_i * exp(logit_i - max_logit)
+    log_z = torch.log(z_stable.clamp(min=1e-30)) + max_logits.squeeze(-1)
+    return log_z  # (n_queries,)  — log-scale partition function
 
 
 def compute_n(
@@ -96,18 +128,20 @@ def compute_n(
     Returns:
         Tensor of shape (n_queries, d_v) with N_mu(q) for each query.
     """
-    logits = queries @ keys.T  # (n_queries, n_keys)
+    logits = compute_logits(queries, keys)  # (n_queries, n_keys)
     max_logits = logits.max(dim=-1, keepdim=True).values
     exp_logits = torch.exp(logits - max_logits)  # (n_queries, n_keys)
 
     if betas is not None:
         exp_logits = exp_logits * betas.unsqueeze(0)
 
-    # n[q] = sum_i exp_logits[q, i] * v_i
-    n = exp_logits @ values  # (n_queries, d_v)
-    # Restore scale (max_logits affects the magnitude uniformly per query)
-    scale = max_logits.squeeze(-1).exp()  # (n_queries,)
-    n = n * scale.unsqueeze(-1)
+    # Return the log-shifted numerator (without restoring exp(max_logit) scale).
+    # N_stable(q) = sum_i beta_i * exp(<q,k_i> - max_logit) * v_i
+    # This avoids float32 overflow. The true N = N_stable * exp(max_logit) but
+    # exp(max_logit) can overflow when inner products are large (~80+).
+    # For L_N computation, use the same per-query shift for hat and ref to ensure
+    # the differences are meaningful. For L_true, the scale cancels in N/Z.
+    n = exp_logits @ values  # (n_queries, d_v)  [log-shifted, no scale restore]
     return n  # (n_queries, d_v)
 
 
@@ -128,14 +162,14 @@ def compute_response(
     Returns:
         Tensor of shape (n_queries, d_v) with A_mu(q) for each query.
     """
-    logits = queries @ keys.T  # (n_queries, n_keys)
+    logits = compute_logits(queries, keys)  # (n_queries, n_keys)
     max_logits = logits.max(dim=-1, keepdim=True).values
     exp_logits = torch.exp(logits - max_logits)  # (n_queries, n_keys)
 
     if betas is not None:
         exp_logits = exp_logits * betas.unsqueeze(0)
 
-    z = exp_logits.sum(dim=-1, keepdim=True)  # (n_queries, 1)
+    z = exp_logits.sum(dim=-1, keepdim=True).clamp(min=1e-30)  # (n_queries, 1)
     n = exp_logits @ values  # (n_queries, d_v)
     # Scale cancels: A = N / Z = (scale * n_stable) / (scale * z_stable)
     return n / z  # (n_queries, d_v)
@@ -149,9 +183,13 @@ def loss_z(
     keys_ref: Tensor,
     betas_ref: Optional[Tensor] = None,
 ) -> Tensor:
-    """Compute the L_Z partition function surrogate loss.
+    """Compute the L_Z partition function surrogate loss (log-scale).
 
-    L_Z = sum_t w_t * (Z_hat(q_t) - Z_ref(q_t))^2
+    L_Z = sum_t w_t * (log Z_hat(q_t) - log Z_ref(q_t))^2
+
+    Uses log-scale (logsumexp) to avoid float32 overflow when inner products
+    are large. The log-scale form is a relative mass error: it measures
+    how much the log-partition function differs between hat and ref.
 
     Args:
         queries: Query bank tensor, shape (n_queries, d_k).
@@ -165,9 +203,9 @@ def loss_z(
     Returns:
         Scalar loss tensor.
     """
-    z_hat = compute_z(queries, keys_hat, betas_hat)
-    z_ref = compute_z(queries, keys_ref, betas_ref)
-    sq_err = (z_hat - z_ref) ** 2  # (n_queries,)
+    log_z_hat = compute_z(queries, keys_hat, betas_hat)   # log Z_hat
+    log_z_ref = compute_z(queries, keys_ref, betas_ref)   # log Z_ref
+    sq_err = (log_z_hat - log_z_ref) ** 2                  # (n_queries,)
     return (weights * sq_err).sum()
 
 
@@ -181,9 +219,19 @@ def loss_n(
     values_ref: Tensor,
     betas_ref: Optional[Tensor] = None,
 ) -> Tensor:
-    """Compute the L_N value numerator surrogate loss.
+    """Compute the L_N value numerator surrogate loss with shared normalization.
 
-    L_N = sum_t w_t * ||N_hat(q_t) - N_ref(q_t)||_2^2
+    L_N = sum_t w_t * ||N_hat_stable(q_t) - N_ref_stable(q_t)||_2^2
+
+    Both hat and ref numerators are computed under the same per-query max logit
+    (global max across hat and ref keys), so they are in the same scale and
+    can be directly compared. This avoids float32 overflow and ensures the
+    difference is meaningful.
+
+    Note: this is NOT the same as |N_hat - N_ref|^2 in absolute scale — it
+    is a scale-shifted version. The difference is proportional to (N_hat - N_ref)
+    but divided by exp(max_logit), which is the same factor for both terms.
+    For fitting purposes this is equivalent; for interpretation note the scale.
 
     Args:
         queries: Query bank tensor, shape (n_queries, d_k).
@@ -198,8 +246,26 @@ def loss_n(
     Returns:
         Scalar loss tensor.
     """
-    n_hat = compute_n(queries, keys_hat, values_hat, betas_hat)
-    n_ref = compute_n(queries, keys_ref, values_ref, betas_ref)
+    logits_hat = compute_logits(queries, keys_hat)   # (n_queries, m)
+    logits_ref = compute_logits(queries, keys_ref)   # (n_queries, n)
+
+    # Shared per-query max for numerical stability
+    max_logits = torch.max(
+        logits_hat.max(dim=-1).values,
+        logits_ref.max(dim=-1).values,
+    ).unsqueeze(-1)  # (n_queries, 1)
+
+    exp_hat = torch.exp(logits_hat - max_logits)
+    exp_ref = torch.exp(logits_ref - max_logits)
+
+    if betas_hat is not None:
+        exp_hat = exp_hat * betas_hat.unsqueeze(0)
+    if betas_ref is not None:
+        exp_ref = exp_ref * betas_ref.unsqueeze(0)
+
+    n_hat = exp_hat @ values_hat   # (n_queries, d_v)
+    n_ref = exp_ref @ values_ref   # (n_queries, d_v)
+
     sq_err = ((n_hat - n_ref) ** 2).sum(dim=-1)  # (n_queries,)
     return (weights * sq_err).sum()
 

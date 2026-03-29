@@ -1,6 +1,6 @@
 # Experiment: Qwen 2 Online N/Z Operator Matching
 
-**Status**: Scaffold only. Not yet runnable end-to-end.
+**Status**: Runnable smoke harness. Supports both prefill-proxy and online decode-time query collection.
 
 ---
 
@@ -14,7 +14,9 @@ Replicate the spirit of the Qwen 2 online experiment from `kv_compaction_experim
 
 1. **Load Qwen 2** (7B Instruct, bfloat16, on CUDA)
 2. **Run inference** on a set of evaluation prompts
-3. **Collect live query vectors**: register hooks on each attention layer to capture the query tensors at each decoding step
+3. **Collect query vectors**:
+   - `online`: prefill the prompt into cache, then capture decode-step queries during greedy generation
+   - `prefill`: use prompt queries as an offline proxy bank
 4. **Build the empirical query bank**: maintain a rolling bank of query vectors per head, weighted by recency (configurable)
 5. **At each KV boundary** (configurable checkpoint interval):
    - For each head and layer, propose a compact support (recency / attention-mass / uniform)
@@ -37,21 +39,23 @@ See `config.yaml` for the experiment parameters. Key knobs:
 
 ---
 
-## TODO: Adapt from kv_compaction_experiment
+## Remaining Phase 2 work
 
-- [ ] Port inference loop hook structure for live query capture
-- [ ] Port KV cache extraction (past_key_values handling for Qwen 2)
-- [ ] Port attention mass computation logic
+- [x] Cache-aware online query collection loop
+- [x] KV cache extraction for Qwen 2
+- [x] Attention-mass support using the experiment query bank
+- [ ] Broader online evaluation over multiple prompts and boundaries
+- [ ] Add `repeat-prefill` control path
 - [ ] Port prompt loading / batching utilities
 - [ ] Port results logging (CSV / JSON per-head metrics)
-- [ ] Wire up `QueryBank`, `beta_fit.fit_beta`, and `verification.verify` from `src/kv_operator_matching/`
+- [x] Wire up `QueryBank`, `beta_fit.fit_beta`, and `verification.verify` from `src/kv_operator_matching/`
 
 ---
 
 ## Running
 
-Not yet runnable. Once the TODOs above are resolved, the intended entry point is:
+Example online smoke run:
 
 ```bash
-python run_experiment.py --config config.yaml --output-dir outputs/run_001
+python run_experiment.py --collection-mode online --layers 4 --budgets 0.25
 ```

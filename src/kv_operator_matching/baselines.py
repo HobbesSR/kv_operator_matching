@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import torch
 
+from .objectives import compute_logits
 from .query_bank import QueryBank
 from .types import CompactRepresentation, HeadState
 
@@ -92,8 +93,8 @@ def attention_mass_baseline(
     keys_f = keys.float()
     weights_f = weights.float()
 
-    # Compute softmax attention weights over full cache for each query
-    logits = queries_f @ keys_f.T  # (n_queries, n)
+    # Compute softmax attention weights over full cache for each query.
+    logits = compute_logits(queries_f, keys_f)  # (n_queries, n)
     attn_weights = torch.softmax(logits, dim=-1)  # (n_queries, n)
 
     # Aggregate: mass[i] = sum_t w_t * attn_weights[t, i]

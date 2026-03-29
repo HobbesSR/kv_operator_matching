@@ -106,6 +106,39 @@ class QueryBank:
             raise RuntimeError("Query bank is empty. Call add_queries() first.")
         return self._queries, self._weights
 
+    def split_train_holdout(self, train_fraction: float = 0.5) -> tuple["QueryBank", "QueryBank"]:
+        """Split the bank into deterministic train and holdout banks.
+
+        The split preserves order and interleaves assignments so both splits
+        cover the bank rather than assigning one contiguous suffix to holdout.
+        This avoids recency-only leakage in prefill-only experiments.
+        """
+        if not 0.0 < train_fraction < 1.0:
+            raise ValueError(f"train_fraction must be between 0 and 1, got {train_fraction!r}.")
+
+        queries, weights = self.get_weighted_bank()
+        train_indices = []
+        holdout_indices = []
+        accumulator = 0.0
+        for index in range(queries.shape[0]):
+            accumulator += train_fraction
+            if accumulator >= 1.0:
+                train_indices.append(index)
+                accumulator -= 1.0
+            else:
+                holdout_indices.append(index)
+
+        if not train_indices and holdout_indices:
+            train_indices.append(holdout_indices.pop(0))
+        if not holdout_indices and train_indices:
+            holdout_indices.append(train_indices[-1])
+
+        train_bank = QueryBank(self.config)
+        holdout_bank = QueryBank(self.config)
+        train_bank.add_queries(queries[train_indices], weights[train_indices])
+        holdout_bank.add_queries(queries[holdout_indices], weights[holdout_indices])
+        return train_bank, holdout_bank
+
     def __len__(self) -> int:
         """Return the number of queries currently in the bank."""
         if self._queries is None:

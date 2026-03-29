@@ -85,13 +85,10 @@ def verify(
             "Only 'response_l2' is supported."
         )
 
-    queries, weights = query_bank.get_weighted_bank()
-    n_total = queries.shape[0]
-    n_holdout = max(1, int(n_total * config.holdout_fraction))
-
-    # Use the last n_holdout entries as the holdout set
-    holdout_queries = queries[-n_holdout:]
-    holdout_weights = weights[-n_holdout:]
+    _fit_bank, holdout_bank = query_bank.split_train_holdout(
+        train_fraction=1.0 - config.holdout_fraction
+    )
+    holdout_queries, holdout_weights = holdout_bank.get_weighted_bank()
 
     with torch.no_grad():
         total_loss = loss_true_response(
