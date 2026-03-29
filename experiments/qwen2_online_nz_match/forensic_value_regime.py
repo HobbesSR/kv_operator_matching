@@ -170,7 +170,7 @@ def main():
     p.add_argument("--budget-frac", type=float, default=0.25)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--train-fraction", type=float, default=0.5)
-    p.add_argument("--save-json", default="results/forensic_value_regime.json")
+    p.add_argument("--save-json", default="results/scratch/forensic_value_regime.json")
     args = p.parse_args()
 
     torch.manual_seed(args.seed)

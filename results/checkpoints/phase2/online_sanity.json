@@ -1,0 +1,30 @@
+{
+  "results": [],
+  "good_support_diagnostics": [
+    {
+      "layer": 4,
+      "kv_head": 0,
+      "budget": 129,
+      "method": "attn_mass",
+      "holdout_l_true": 0.278910756111145,
+      "design_rank": 32,
+      "design_stable_rank": 1.360499620437622,
+      "design_condition_number": 4481.984980018656,
+      "holdout_top5_error_share": 0.6973345875740051,
+      "passed": false
+    },
+    {
+      "layer": 4,
+      "kv_head": 1,
+      "budget": 129,
+      "method": "attn_mass",
+      "holdout_l_true": 0.30934035778045654,
+      "design_rank": 32,
+      "design_stable_rank": 1.1721917390823364,
+      "design_condition_number": 1879.5126098819067,
+      "holdout_top5_error_share": 0.3832503855228424,
+      "passed": false
+    }
+  ],
+  "refit_diagnostics": []
+}

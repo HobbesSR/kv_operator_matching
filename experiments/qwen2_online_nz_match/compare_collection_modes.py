@@ -68,7 +68,7 @@ def parse_args():
     p.add_argument("--prefill-chunk-size", type=int, default=64)
     p.add_argument("--train-fraction", type=float, default=0.5)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--save-json", default="results/collection_mode_comparison.json")
+    p.add_argument("--save-json", default="results/scratch/collection_mode_comparison.json")
     return p.parse_args()
 
 def collect_mode_state(

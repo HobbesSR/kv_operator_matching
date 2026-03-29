@@ -64,7 +64,7 @@ def parse_args():
     p.add_argument("--layers", nargs="+", type=int, default=[4, 20])
     p.add_argument("--max-continuation-tokens", type=int, default=32)
     p.add_argument("--prefill-chunk-size", type=int, default=64)
-    p.add_argument("--save-json", default="results/teacher_forced_parity.json")
+    p.add_argument("--save-json", default="results/scratch/teacher_forced_parity.json")
     return p.parse_args()
 
 

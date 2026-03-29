@@ -1,0 +1,109 @@
+{
+  "prompt_file": "near_capacity_dispatch_safe.json",
+  "prefix_turns": 8,
+  "continuation_turns": 4,
+  "observed_tokens": 32,
+  "teacher_forced_continuation_tokens": 32,
+  "boundary_kv_parity": [
+    {
+      "layer": 4,
+      "name": "boundary_keys_teacher_vs_prompt",
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "allclose_atol_1e_4": true
+    },
+    {
+      "layer": 4,
+      "name": "boundary_values_teacher_vs_prompt",
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "allclose_atol_1e_4": true
+    },
+    {
+      "layer": 4,
+      "name": "boundary_keys_batched_vs_prompt",
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "allclose_atol_1e_4": true
+    },
+    {
+      "layer": 4,
+      "name": "boundary_values_batched_vs_prompt",
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "allclose_atol_1e_4": true
+    },
+    {
+      "layer": 4,
+      "name": "boundary_keys_teacher_vs_batched",
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "allclose_atol_1e_4": true
+    },
+    {
+      "layer": 4,
+      "name": "boundary_values_teacher_vs_batched",
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "allclose_atol_1e_4": true
+    },
+    {
+      "layer": 20,
+      "name": "boundary_keys_teacher_vs_prompt",
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "allclose_atol_1e_4": true
+    },
+    {
+      "layer": 20,
+      "name": "boundary_values_teacher_vs_prompt",
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "allclose_atol_1e_4": true
+    },
+    {
+      "layer": 20,
+      "name": "boundary_keys_batched_vs_prompt",
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "allclose_atol_1e_4": true
+    },
+    {
+      "layer": 20,
+      "name": "boundary_values_batched_vs_prompt",
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "allclose_atol_1e_4": true
+    },
+    {
+      "layer": 20,
+      "name": "boundary_keys_teacher_vs_batched",
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "allclose_atol_1e_4": true
+    },
+    {
+      "layer": 20,
+      "name": "boundary_values_teacher_vs_batched",
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "allclose_atol_1e_4": true
+    }
+  ],
+  "query_parity": [
+    {
+      "layer": 4,
+      "name": "continuation_queries_teacher_vs_batched",
+      "max_abs": 0.0625,
+      "mean_abs": 0.0030113989487290382,
+      "allclose_atol_1e_4": false
+    },
+    {
+      "layer": 20,
+      "name": "continuation_queries_teacher_vs_batched",
+      "max_abs": 0.4375,
+      "mean_abs": 0.013226856477558613,
+      "allclose_atol_1e_4": false
+    }
+  ]
+}

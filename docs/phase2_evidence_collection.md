@@ -85,10 +85,10 @@ Coverage-aware accounting is therefore necessary, but not sufficient.
 
 Artifacts from tonight:
 
-- [teacher_forced_parity.json](/home/csmith/projects/kv_operator_matching/results/teacher_forced_parity.json)
-- [teacher_forced_sanity.json](/home/csmith/projects/kv_operator_matching/results/teacher_forced_sanity.json)
-- [collection_mode_comparison_teacher_forced_small.json](/home/csmith/projects/kv_operator_matching/results/collection_mode_comparison_teacher_forced_small.json)
-- [collection_mode_comparison_with_teacher_forced.json](/home/csmith/projects/kv_operator_matching/results/collection_mode_comparison_with_teacher_forced.json)
+- [teacher_forced_parity.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/teacher_forced_parity.json)
+- [teacher_forced_sanity.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/teacher_forced_sanity.json)
+- [collection_mode_comparison_teacher_forced_small.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/collection_mode_comparison_teacher_forced_small.json)
+- [collection_mode_comparison_with_teacher_forced.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/collection_mode_comparison_with_teacher_forced.json)
 
 ---
 

@@ -1,0 +1,802 @@
+[
+  {
+    "method": "recency",
+    "layer": 4,
+    "kv_head": 0,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 4126.93408203125,
+    "l_true": 30.500133514404297,
+    "elapsed_ms": 23.714065551757812
+  },
+  {
+    "method": "recency+refit",
+    "layer": 4,
+    "kv_head": 0,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 5451.75,
+    "l_true": 32.4560546875,
+    "elapsed_ms": 1195.711612701416
+  },
+  {
+    "method": "attn_mass",
+    "layer": 4,
+    "kv_head": 0,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 1.2195965837236145e-06,
+    "l_true": 4.514393731369637e-05,
+    "elapsed_ms": 5.162477493286133
+  },
+  {
+    "method": "attn_mass+refit",
+    "layer": 4,
+    "kv_head": 0,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 30.953861236572266,
+    "l_true": NaN,
+    "elapsed_ms": 795.6717014312744
+  },
+  {
+    "method": "uniform",
+    "layer": 4,
+    "kv_head": 0,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 40.664894104003906,
+    "l_true": 6.568143367767334,
+    "elapsed_ms": 49.96204376220703
+  },
+  {
+    "method": "recency",
+    "layer": 4,
+    "kv_head": 0,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 2347.471435546875,
+    "l_true": 27.789276123046875,
+    "elapsed_ms": 16.5860652923584
+  },
+  {
+    "method": "recency+refit",
+    "layer": 4,
+    "kv_head": 0,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 3279.0283203125,
+    "l_true": 29.539161682128906,
+    "elapsed_ms": 4673.301458358765
+  },
+  {
+    "method": "attn_mass",
+    "layer": 4,
+    "kv_head": 0,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 0.0,
+    "l_true": 1.1522094313810155e-14,
+    "elapsed_ms": 28.512001037597656
+  },
+  {
+    "method": "attn_mass+refit",
+    "layer": 4,
+    "kv_head": 0,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 30.953386306762695,
+    "l_true": NaN,
+    "elapsed_ms": 2966.9504165649414
+  },
+  {
+    "method": "uniform",
+    "layer": 4,
+    "kv_head": 0,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 30.80181312561035,
+    "l_true": 4.811173439025879,
+    "elapsed_ms": 11.010408401489258
+  },
+  {
+    "method": "recency",
+    "layer": 4,
+    "kv_head": 1,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 2320.53955078125,
+    "l_true": 24.674867630004883,
+    "elapsed_ms": 6.716728210449219
+  },
+  {
+    "method": "recency+refit",
+    "layer": 4,
+    "kv_head": 1,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 2904.677978515625,
+    "l_true": 24.606834411621094,
+    "elapsed_ms": 1093.397617340088
+  },
+  {
+    "method": "attn_mass",
+    "layer": 4,
+    "kv_head": 1,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 3.312380840725382e-07,
+    "l_true": 8.020202585612424e-06,
+    "elapsed_ms": 10.381460189819336
+  },
+  {
+    "method": "attn_mass+refit",
+    "layer": 4,
+    "kv_head": 1,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 12.652691841125488,
+    "l_true": NaN,
+    "elapsed_ms": 828.0539512634277
+  },
+  {
+    "method": "uniform",
+    "layer": 4,
+    "kv_head": 1,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 348.51116943359375,
+    "l_true": 2.7527120113372803,
+    "elapsed_ms": 15.698671340942383
+  },
+  {
+    "method": "recency",
+    "layer": 4,
+    "kv_head": 1,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 1110.5196533203125,
+    "l_true": 22.783950805664062,
+    "elapsed_ms": 18.444538116455078
+  },
+  {
+    "method": "recency+refit",
+    "layer": 4,
+    "kv_head": 1,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 1363.954833984375,
+    "l_true": 22.934598922729492,
+    "elapsed_ms": 6425.59027671814
+  },
+  {
+    "method": "attn_mass",
+    "layer": 4,
+    "kv_head": 1,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 5.684341886080802e-14,
+    "l_true": 6.117586905801664e-13,
+    "elapsed_ms": 5.955934524536133
+  },
+  {
+    "method": "attn_mass+refit",
+    "layer": 4,
+    "kv_head": 1,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 12.652557373046875,
+    "l_true": NaN,
+    "elapsed_ms": 3508.6278915405273
+  },
+  {
+    "method": "uniform",
+    "layer": 4,
+    "kv_head": 1,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 151.09988403320312,
+    "l_true": 1.848101019859314,
+    "elapsed_ms": 7.673740386962891
+  },
+  {
+    "method": "recency",
+    "layer": 12,
+    "kv_head": 0,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 1179.5810546875,
+    "l_true": 66.17288208007812,
+    "elapsed_ms": 15.488862991333008
+  },
+  {
+    "method": "recency+refit",
+    "layer": 12,
+    "kv_head": 0,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 1275.2935791015625,
+    "l_true": 67.26913452148438,
+    "elapsed_ms": 889.6520137786865
+  },
+  {
+    "method": "attn_mass",
+    "layer": 12,
+    "kv_head": 0,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 1.0305862426757812,
+    "l_true": 4.2743401527404785,
+    "elapsed_ms": 4.392385482788086
+  },
+  {
+    "method": "attn_mass+refit",
+    "layer": 12,
+    "kv_head": 0,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 19.73137855529785,
+    "l_true": 11.943078994750977,
+    "elapsed_ms": 1084.4371318817139
+  },
+  {
+    "method": "uniform",
+    "layer": 12,
+    "kv_head": 0,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 167.61019897460938,
+    "l_true": 50.31050109863281,
+    "elapsed_ms": 21.765947341918945
+  },
+  {
+    "method": "recency",
+    "layer": 12,
+    "kv_head": 0,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 229.9485321044922,
+    "l_true": 43.36083984375,
+    "elapsed_ms": 6.376981735229492
+  },
+  {
+    "method": "recency+refit",
+    "layer": 12,
+    "kv_head": 0,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 240.30612182617188,
+    "l_true": NaN,
+    "elapsed_ms": 4412.7037525177
+  },
+  {
+    "method": "attn_mass",
+    "layer": 12,
+    "kv_head": 0,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 1.9039413601262822e-08,
+    "l_true": 1.3995003200761857e-06,
+    "elapsed_ms": 6.912708282470703
+  },
+  {
+    "method": "attn_mass+refit",
+    "layer": 12,
+    "kv_head": 0,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 15.084959030151367,
+    "l_true": 10.420262336730957,
+    "elapsed_ms": 4733.0687046051025
+  },
+  {
+    "method": "uniform",
+    "layer": 12,
+    "kv_head": 0,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 116.34168243408203,
+    "l_true": 38.0632438659668,
+    "elapsed_ms": 7.4520111083984375
+  },
+  {
+    "method": "recency",
+    "layer": 12,
+    "kv_head": 1,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 2106.061767578125,
+    "l_true": 44.348472595214844,
+    "elapsed_ms": 4.590749740600586
+  },
+  {
+    "method": "recency+refit",
+    "layer": 12,
+    "kv_head": 1,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 2290.642333984375,
+    "l_true": 45.00975036621094,
+    "elapsed_ms": 992.361307144165
+  },
+  {
+    "method": "attn_mass",
+    "layer": 12,
+    "kv_head": 1,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 1.2379205145407468e-05,
+    "l_true": 0.00044173048809170723,
+    "elapsed_ms": 7.903814315795898
+  },
+  {
+    "method": "attn_mass+refit",
+    "layer": 12,
+    "kv_head": 1,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 3.995365858078003,
+    "l_true": 2.5833802223205566,
+    "elapsed_ms": 1063.049554824829
+  },
+  {
+    "method": "uniform",
+    "layer": 12,
+    "kv_head": 1,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 90.92378234863281,
+    "l_true": 19.649463653564453,
+    "elapsed_ms": 4.651069641113281
+  },
+  {
+    "method": "recency",
+    "layer": 12,
+    "kv_head": 1,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 974.6646118164062,
+    "l_true": 43.8802604675293,
+    "elapsed_ms": 5.193471908569336
+  },
+  {
+    "method": "recency+refit",
+    "layer": 12,
+    "kv_head": 1,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 1152.682373046875,
+    "l_true": 46.078102111816406,
+    "elapsed_ms": 4392.782926559448
+  },
+  {
+    "method": "attn_mass",
+    "layer": 12,
+    "kv_head": 1,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 1.4210854715202004e-14,
+    "l_true": 1.799094862886888e-13,
+    "elapsed_ms": 15.769481658935547
+  },
+  {
+    "method": "attn_mass+refit",
+    "layer": 12,
+    "kv_head": 1,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 4.059128284454346,
+    "l_true": 2.653212070465088,
+    "elapsed_ms": 4612.847089767456
+  },
+  {
+    "method": "uniform",
+    "layer": 12,
+    "kv_head": 1,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 35.807701110839844,
+    "l_true": 14.738393783569336,
+    "elapsed_ms": 10.890722274780273
+  },
+  {
+    "method": "recency",
+    "layer": 20,
+    "kv_head": 0,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 14896.3916015625,
+    "l_true": 77.6131362915039,
+    "elapsed_ms": 10.378122329711914
+  },
+  {
+    "method": "recency+refit",
+    "layer": 20,
+    "kv_head": 0,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 24664.42578125,
+    "l_true": NaN,
+    "elapsed_ms": 562.8881454467773
+  },
+  {
+    "method": "attn_mass",
+    "layer": 20,
+    "kv_head": 0,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 2987.958984375,
+    "l_true": 32.10488510131836,
+    "elapsed_ms": 7.803916931152344
+  },
+  {
+    "method": "attn_mass+refit",
+    "layer": 20,
+    "kv_head": 0,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 4550.44921875,
+    "l_true": NaN,
+    "elapsed_ms": 897.7952003479004
+  },
+  {
+    "method": "uniform",
+    "layer": 20,
+    "kv_head": 0,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 6551.9814453125,
+    "l_true": 57.486454010009766,
+    "elapsed_ms": 4.5909881591796875
+  },
+  {
+    "method": "recency",
+    "layer": 20,
+    "kv_head": 0,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 2305.80078125,
+    "l_true": 43.6175537109375,
+    "elapsed_ms": 4.701137542724609
+  },
+  {
+    "method": "recency+refit",
+    "layer": 20,
+    "kv_head": 0,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 8706.8974609375,
+    "l_true": NaN,
+    "elapsed_ms": 3977.6034355163574
+  },
+  {
+    "method": "attn_mass",
+    "layer": 20,
+    "kv_head": 0,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 10.896282196044922,
+    "l_true": 1.0486304759979248,
+    "elapsed_ms": 5.084991455078125
+  },
+  {
+    "method": "attn_mass+refit",
+    "layer": 20,
+    "kv_head": 0,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 1601.750244140625,
+    "l_true": NaN,
+    "elapsed_ms": 3707.8611850738525
+  },
+  {
+    "method": "uniform",
+    "layer": 20,
+    "kv_head": 0,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 2488.71826171875,
+    "l_true": 33.431312561035156,
+    "elapsed_ms": 5.461931228637695
+  },
+  {
+    "method": "recency",
+    "layer": 20,
+    "kv_head": 1,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 9223.1005859375,
+    "l_true": 108.83373260498047,
+    "elapsed_ms": 3.9179325103759766
+  },
+  {
+    "method": "recency+refit",
+    "layer": 20,
+    "kv_head": 1,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 9305.63671875,
+    "l_true": 104.06260681152344,
+    "elapsed_ms": 957.4553966522217
+  },
+  {
+    "method": "attn_mass",
+    "layer": 20,
+    "kv_head": 1,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 9.729648809297942e-06,
+    "l_true": 0.0010624929564073682,
+    "elapsed_ms": 16.81971549987793
+  },
+  {
+    "method": "attn_mass+refit",
+    "layer": 20,
+    "kv_head": 1,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 0.48193812370300293,
+    "l_true": 3.0815398693084717,
+    "elapsed_ms": 1086.9626998901367
+  },
+  {
+    "method": "uniform",
+    "layer": 20,
+    "kv_head": 1,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 19.40744400024414,
+    "l_true": 39.99298858642578,
+    "elapsed_ms": 3.4661293029785156
+  },
+  {
+    "method": "recency",
+    "layer": 20,
+    "kv_head": 1,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 2910.048583984375,
+    "l_true": 95.92473602294922,
+    "elapsed_ms": 3.866910934448242
+  },
+  {
+    "method": "recency+refit",
+    "layer": 20,
+    "kv_head": 1,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 2868.071533203125,
+    "l_true": 97.98294067382812,
+    "elapsed_ms": 4628.330230712891
+  },
+  {
+    "method": "attn_mass",
+    "layer": 20,
+    "kv_head": 1,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 3.0331648304127157e-10,
+    "l_true": 3.289306249598667e-08,
+    "elapsed_ms": 31.620264053344727
+  },
+  {
+    "method": "attn_mass+refit",
+    "layer": 20,
+    "kv_head": 1,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 0.4918183982372284,
+    "l_true": 3.122875928878784,
+    "elapsed_ms": 4629.47154045105
+  },
+  {
+    "method": "uniform",
+    "layer": 20,
+    "kv_head": 1,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 13.407962799072266,
+    "l_true": 25.744333267211914,
+    "elapsed_ms": 4.16874885559082
+  },
+  {
+    "method": "recency",
+    "layer": 28,
+    "kv_head": 0,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 4238.65283203125,
+    "l_true": 144.0916748046875,
+    "elapsed_ms": 4.050016403198242
+  },
+  {
+    "method": "recency+refit",
+    "layer": 28,
+    "kv_head": 0,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 4858.44091796875,
+    "l_true": 148.00442504882812,
+    "elapsed_ms": 1013.7290954589844
+  },
+  {
+    "method": "attn_mass",
+    "layer": 28,
+    "kv_head": 0,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 331.52471923828125,
+    "l_true": 35.76750946044922,
+    "elapsed_ms": 5.177021026611328
+  },
+  {
+    "method": "attn_mass+refit",
+    "layer": 28,
+    "kv_head": 0,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 551.1598510742188,
+    "l_true": NaN,
+    "elapsed_ms": 1066.5993690490723
+  },
+  {
+    "method": "uniform",
+    "layer": 28,
+    "kv_head": 0,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 1129.7232666015625,
+    "l_true": 91.52233123779297,
+    "elapsed_ms": 16.082286834716797
+  },
+  {
+    "method": "recency",
+    "layer": 28,
+    "kv_head": 0,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 1481.234130859375,
+    "l_true": 92.55038452148438,
+    "elapsed_ms": 17.57526397705078
+  },
+  {
+    "method": "recency+refit",
+    "layer": 28,
+    "kv_head": 0,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 1828.78564453125,
+    "l_true": NaN,
+    "elapsed_ms": 4740.238428115845
+  },
+  {
+    "method": "attn_mass",
+    "layer": 28,
+    "kv_head": 0,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 0.06016247719526291,
+    "l_true": 0.9558687210083008,
+    "elapsed_ms": 6.950855255126953
+  },
+  {
+    "method": "attn_mass+refit",
+    "layer": 28,
+    "kv_head": 0,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 323.35626220703125,
+    "l_true": NaN,
+    "elapsed_ms": 4323.097467422485
+  },
+  {
+    "method": "uniform",
+    "layer": 28,
+    "kv_head": 0,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 506.82177734375,
+    "l_true": 59.47632598876953,
+    "elapsed_ms": 18.407583236694336
+  },
+  {
+    "method": "recency",
+    "layer": 28,
+    "kv_head": 1,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 1529.9632568359375,
+    "l_true": 76.43804168701172,
+    "elapsed_ms": 54.32629585266113
+  },
+  {
+    "method": "recency+refit",
+    "layer": 28,
+    "kv_head": 1,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 1813.858154296875,
+    "l_true": 86.73011016845703,
+    "elapsed_ms": 1037.3187065124512
+  },
+  {
+    "method": "attn_mass",
+    "layer": 28,
+    "kv_head": 1,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 348.68115234375,
+    "l_true": 47.28146743774414,
+    "elapsed_ms": 4.732608795166016
+  },
+  {
+    "method": "attn_mass+refit",
+    "layer": 28,
+    "kv_head": 1,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 509.33453369140625,
+    "l_true": 56.2459831237793,
+    "elapsed_ms": 1056.5135478973389
+  },
+  {
+    "method": "uniform",
+    "layer": 28,
+    "kv_head": 1,
+    "budget": 127,
+    "n_tokens": 509,
+    "l_z": 897.117919921875,
+    "l_true": 78.1374282836914,
+    "elapsed_ms": 6.161689758300781
+  },
+  {
+    "method": "recency",
+    "layer": 28,
+    "kv_head": 1,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 473.61968994140625,
+    "l_true": 37.120567321777344,
+    "elapsed_ms": 6.408214569091797
+  },
+  {
+    "method": "recency+refit",
+    "layer": 28,
+    "kv_head": 1,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 710.4254150390625,
+    "l_true": 51.14366912841797,
+    "elapsed_ms": 7015.021562576294
+  },
+  {
+    "method": "attn_mass",
+    "layer": 28,
+    "kv_head": 1,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 28.874557495117188,
+    "l_true": 15.899470329284668,
+    "elapsed_ms": 5.625486373901367
+  },
+  {
+    "method": "attn_mass+refit",
+    "layer": 28,
+    "kv_head": 1,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 190.46707153320312,
+    "l_true": 32.47655487060547,
+    "elapsed_ms": 4762.334585189819
+  },
+  {
+    "method": "uniform",
+    "layer": 28,
+    "kv_head": 1,
+    "budget": 254,
+    "n_tokens": 509,
+    "l_z": 351.1085205078125,
+    "l_true": 46.21267318725586,
+    "elapsed_ms": 6.449460983276367
+  }
+]
