@@ -89,6 +89,8 @@ Artifacts from tonight:
 - [teacher_forced_sanity.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/teacher_forced_sanity.json)
 - [collection_mode_comparison_teacher_forced_small.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/collection_mode_comparison_teacher_forced_small.json)
 - [collection_mode_comparison_with_teacher_forced.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/collection_mode_comparison_with_teacher_forced.json)
+- [collection_mode_comparison_substantive_q256_t32.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/collection_mode_comparison_substantive_q256_t32.json)
+- [collection_mode_comparison_substantive_q512_t64.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase2/collection_mode_comparison_substantive_q512_t64.json)
 
 ---
 
@@ -176,3 +178,64 @@ The current program state is therefore:
 - the remaining uncertainty is no longer "do we have the regimes?" but
   "which methods survive once decode-like supervision is both correct and
   dense enough"
+
+### Broader Substantive-Prompt Sweep
+
+On the broader sweep over 4 substantive prompts, 4 layers, 2 budgets, and both
+KV heads (`64` holdout cells per regime-method pairing):
+
+- With `max_queries=256`, `max_new_tokens=32`:
+  - `recency+vfit` is the strongest result in every regime:
+    - `online`: mean holdout `ΔL_true = -2.76`, improved `59/64`
+    - `teacher-forced`: `-5.90`, improved `64/64`
+    - `repeat-prefill`: `-5.16`, improved `64/64`
+  - `recency+phase1b` becomes mildly to strongly positive:
+    - `online`: `-0.54`, improved `33/64`
+    - `teacher-forced`: `-3.10`, improved `46/64`
+    - `repeat-prefill`: `-0.08`, improved `34/64`
+  - `attn_mass+refit` is still weak:
+    - `online`: `+0.17`
+    - `teacher-forced`: `+0.09`
+    - `repeat-prefill`: `+0.51`
+  - `attn_mass+vfit` still needs denser or different supervision:
+    - `online`: `+1.03`
+    - `teacher-forced`: `+0.83`
+    - `repeat-prefill`: `-0.16`
+
+- With denser evidence (`max_queries=512`, `max_new_tokens=64`):
+  - `recency+vfit` stays dominant and improves further under decode-like
+    regimes:
+    - `online`: `-3.10`, improved `61/64`
+    - `teacher-forced`: `-6.16`, improved `64/64`
+    - `repeat-prefill`: `-5.02`, improved `64/64`
+  - `recency+phase1b` stays positive under `online` and `teacher-forced`:
+    - `online`: `-0.59`
+    - `teacher-forced`: `-3.18`
+    - `repeat-prefill`: `+0.35`
+  - `attn_mass+vfit` improves slightly under `online` and `teacher-forced`,
+    but remains harmful there:
+    - `online`: `+0.83`
+    - `teacher-forced`: `+0.72`
+    - `repeat-prefill`: `-0.35`
+  - `attn_mass+refit` gets worse rather than better with more evidence.
+
+The current broad Phase 2 read is therefore:
+
+- `recency+vfit` is now the main positive signal, not a small curiosity.
+- `teacher-forced` is not merely a control; for the recency value-repair
+  family it is the strongest evidence regime so far.
+- `attn_mass` local repair still looks supervision-limited or mismatched even
+  after broadening the matrix.
+- More evidence does not rescue the `beta` stage in the attention-mass path.
+
+Layer-pattern note from the denser sweep:
+
+- `recency+vfit` is broadly positive on essentially every layer:
+  - `online`: improved `16/16` cells on layers 4, 12, and 28, and `13/16` on
+    layer 20
+  - `teacher-forced`: improved `16/16` on all four tested layers
+- `attn_mass` repairs degrade with depth rather than stabilizing:
+  - `attn_mass+vfit` remains harmful on every tested `online` layer and on
+    every tested `teacher-forced` layer, with the worst mean deltas at layer 28
+  - `attn_mass+phase1b` is uniformly harmful across all tested `online` layers
+    and nearly so under `teacher-forced`
