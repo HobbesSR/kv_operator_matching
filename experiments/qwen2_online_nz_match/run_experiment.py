@@ -2,11 +2,13 @@
 """
 Qwen 2.5 N/Z operator matching smoke test.
 
-Supports two query-bank collection modes:
-  prefill - run a single forward pass on a prompt and use the prompt queries
-            as an offline proxy bank
-  online  - prefill the prompt into the KV cache, then collect decode-step
-            queries during greedy generation into a live query bank
+Supports four query-bank collection modes:
+  prefill        - use prompt-prefill queries as an offline proxy bank
+  repeat-prefill - use a separate "prompt / Repeat it. / prompt" prefill bank
+  teacher-forced - prefill the prompt, then feed a fixed continuation token by
+                   token to harvest decode-time queries
+  online         - prefill the prompt into the KV cache, then collect decode-step
+                   queries during greedy generation into a live query bank
 
 Methods compared:
   recency         - keep last m tokens, betas=1
@@ -213,42 +215,110 @@ def _compute_query_states_from_hidden_states(
     return query_states
 
 
-def extract_kv_and_queries(
+def extract_kv_states_from_prompt(
     model,
     tokenizer,
     prompt: str,
     device: str,
     layers_of_interest: List[int],
-) -> Tuple[Dict, Dict]:
-    """
-    Run a single prefill pass and return per-layer KV states and query vectors.
-
-    KV states: from past_key_values (post-RoPE, as used at inference time).
-    Query states: computed by manually applying q_proj + RoPE to each layer's
-    input hidden state (from output_hidden_states=True), giving the actual
-    post-RoPE query vectors that would attend to the cached keys.
-
-    Returns:
-        kv_states:    {layer: {"keys": (n_kv_heads, seq, head_dim),
-                               "values": (n_kv_heads, seq, head_dim)}}
-        query_states: {layer: (n_heads, seq, head_dim)}
-    Both are float32 on CPU.
-    """
+) -> Dict:
+    """Run a single prefill pass and return per-layer KV states."""
     inputs = tokenizer(prompt, return_tensors="pt").to(device)
     seq_len = inputs["input_ids"].shape[1]
     print(f"  Prompt: {seq_len} tokens", flush=True)
 
     with torch.no_grad():
+        outputs = model(**inputs, use_cache=True, output_hidden_states=False)
+
+    return _extract_kv_states_from_cache(outputs.past_key_values, layers_of_interest)
+
+
+def extract_query_states_from_prompt(
+    model,
+    tokenizer,
+    prompt: str,
+    device: str,
+    layers_of_interest: List[int],
+) -> Dict:
+    """
+    Run a single prefill pass and return per-layer post-RoPE query states.
+    """
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    seq_len = inputs["input_ids"].shape[1]
+    print(f"  Query prompt: {seq_len} tokens", flush=True)
+
+    with torch.no_grad():
         outputs = model(**inputs, use_cache=True, output_hidden_states=True)
 
-    kv_states = _extract_kv_states_from_cache(outputs.past_key_values, layers_of_interest)
     query_states = _compute_query_states_from_hidden_states(
         model,
         outputs.hidden_states,
         torch.arange(seq_len, device=device).unsqueeze(0),
         layers_of_interest,
     )
-    return kv_states, query_states
+    return query_states
+
+
+def _join_turn_text(turns: List[dict]) -> str:
+    return "\n\n".join(
+        f"[{turn.get('speaker', 'unknown').upper()}]: {turn.get('content', '')}"
+        for turn in turns
+        if turn.get("content")
+    )
+
+
+def load_prompt_segments_from_file(
+    path: Path,
+    prefix_turns: int = 8,
+    continuation_turns: Optional[int] = None,
+) -> tuple[str, str]:
+    """Load a prompt prefix and held-out continuation from a smoke-test JSON file."""
+    data = json.loads(path.read_text())
+    samples = data.get("samples", [])
+    if not samples:
+        raise ValueError(f"No samples found in {path}.")
+    turns = samples[0].get("turns", [])
+    if prefix_turns <= 0:
+        raise ValueError(f"prefix_turns must be positive, got {prefix_turns}.")
+    prefix = _join_turn_text(turns[:prefix_turns])
+    if continuation_turns is None:
+        continuation_slice = turns[prefix_turns:]
+    else:
+        continuation_slice = turns[prefix_turns : prefix_turns + continuation_turns]
+    continuation = _join_turn_text(continuation_slice)
+    return prefix, continuation
+
+
+def extract_teacher_forced_continuation_ids(
+    tokenizer,
+    prefix_text: str,
+    continuation_text: str,
+) -> List[int]:
+    """
+    Extract exact continuation token ids from the concatenated text via offsets.
+
+    This avoids relying on token-count additivity across the prefix/continuation
+    boundary, which is not guaranteed by subword tokenizers.
+    """
+    if not continuation_text:
+        return []
+    separator = "\n\n" if prefix_text else ""
+    full_text = prefix_text + separator + continuation_text
+    continuation_char_start = len(prefix_text)
+    try:
+        encoded = tokenizer(full_text, return_offsets_mapping=True)
+        input_ids = encoded["input_ids"]
+        offsets = encoded["offset_mapping"]
+        continuation_ids = [
+            int(token_id)
+            for token_id, (start, _end) in zip(input_ids, offsets)
+            if start >= continuation_char_start
+        ]
+    except NotImplementedError:
+        full_ids = tokenizer(full_text)["input_ids"]
+        prefix_ids = tokenizer(prefix_text)["input_ids"]
+        continuation_ids = [int(token_id) for token_id in full_ids[len(prefix_ids):]]
+    return continuation_ids
 
 
 # ---------------------------------------------------------------------------
@@ -289,13 +359,9 @@ def _forward_with_cache_position(
             return model(**kwargs)
 
 
-def _select_greedy_non_eos(logits: torch.Tensor, eos_token_id: Optional[int]) -> int:
-    """Greedy decode, but avoid an immediate EOS when another high-logit token exists."""
-    ranked = torch.argsort(logits[0], descending=True)
-    for token_id in ranked.tolist():
-        if eos_token_id is None or token_id != eos_token_id:
-            return int(token_id)
-    return int(ranked[0].item())
+def _select_greedy(logits: torch.Tensor) -> int:
+    """Standard greedy next-token selection."""
+    return int(torch.argmax(logits, dim=-1).item())
 
 
 def _build_empty_query_banks(
@@ -374,10 +440,15 @@ def collect_online_kv_and_query_banks(
     if logits is None:
         raise RuntimeError("Prompt prefill did not produce logits.")
 
+    # The compacted object for the online regime is the prompt-boundary cache.
+    # Decode-time queries are future evidence about that fixed prefix block, not
+    # a license to evaluate against keys/values from tokens generated later.
+    boundary_kv_states = _extract_kv_states_from_cache(past_key_values, layers_of_interest)
+
     generated_tokens = 0
     logical_position = prompt_len
     eos_token_id = tokenizer.eos_token_id
-    next_token = _select_greedy_non_eos(logits, eos_token_id)
+    next_token = _select_greedy(logits)
     while generated_tokens < max_new_tokens:
         if eos_token_id is not None and next_token == eos_token_id:
             break
@@ -401,13 +472,90 @@ def collect_online_kv_and_query_banks(
         _add_query_states_to_banks(query_states, query_banks, n_heads, n_kv_heads)
         generated_tokens += 1
         logical_position += 1
-        next_token = _select_greedy_non_eos(logits, eos_token_id)
+        next_token = _select_greedy(logits)
 
     if generated_tokens == 0:
         raise RuntimeError("Online collection generated zero observed decode steps.")
 
-    kv_states = _extract_kv_states_from_cache(past_key_values, layers_of_interest)
-    return kv_states, query_banks, generated_tokens
+    return boundary_kv_states, query_banks, generated_tokens
+
+
+def collect_teacher_forced_kv_and_query_banks(
+    model,
+    tokenizer,
+    prompt: str,
+    continuation_token_ids: List[int],
+    device: str,
+    layers_of_interest: List[int],
+    bank_config: QueryBankConfig,
+    prefill_chunk_size: int,
+    max_continuation_tokens: int,
+) -> Tuple[Dict, Dict[Tuple[int, int], QueryBank], int]:
+    """
+    Collect decode-time query evidence on a fixed known continuation.
+
+    The compacted object remains the prompt-boundary cache. Continuation tokens
+    are fed one at a time using teacher forcing to harvest decode-step queries
+    without sampling noise.
+    """
+    if not continuation_token_ids:
+        raise RuntimeError("Teacher-forced collection requires a non-empty continuation.")
+
+    inputs = tokenizer(prompt, return_tensors="pt")
+    input_ids = inputs["input_ids"].to(device)
+    prompt_len = input_ids.shape[1]
+    print(f"  Prompt: {prompt_len} tokens", flush=True)
+
+    n_heads = model.config.num_attention_heads
+    n_kv_heads = model.config.num_key_value_heads
+    query_banks = _build_empty_query_banks(layers_of_interest, n_kv_heads, bank_config)
+
+    past_key_values = None
+    processed = 0
+    chunk_size = max(1, prefill_chunk_size)
+    while processed < prompt_len:
+        chunk_end = min(prompt_len, processed + chunk_size)
+        chunk_ids = input_ids[:, processed:chunk_end]
+        outputs = _forward_with_cache_position(
+            model,
+            chunk_ids,
+            past_key_values,
+            processed,
+            output_hidden_states=False,
+            output_attentions=False,
+        )
+        past_key_values = outputs.past_key_values
+        processed = chunk_end
+
+    boundary_kv_states = _extract_kv_states_from_cache(past_key_values, layers_of_interest)
+
+    observed_tokens = 0
+    logical_position = prompt_len
+    for token_id in continuation_token_ids[:max_continuation_tokens]:
+        token_tensor = torch.tensor([[int(token_id)]], device=device, dtype=torch.long)
+        outputs = _forward_with_cache_position(
+            model,
+            token_tensor,
+            past_key_values,
+            logical_position,
+            output_hidden_states=True,
+            output_attentions=False,
+        )
+        past_key_values = outputs.past_key_values
+        query_states = _compute_query_states_from_hidden_states(
+            model,
+            outputs.hidden_states,
+            torch.tensor([[logical_position]], device=device, dtype=torch.long),
+            layers_of_interest,
+        )
+        _add_query_states_to_banks(query_states, query_banks, n_heads, n_kv_heads)
+        observed_tokens += 1
+        logical_position += 1
+
+    if observed_tokens == 0:
+        raise RuntimeError("Teacher-forced collection observed zero continuation tokens.")
+
+    return boundary_kv_states, query_banks, observed_tokens
 
 def build_query_bank(
     query_states_for_layer: torch.Tensor,  # (n_heads, seq_len, head_dim)
@@ -439,6 +587,38 @@ def build_query_bank(
     bank = QueryBank(config)
     bank.add_queries(all_queries)
     return bank
+
+
+def summarize_collection_meta(
+    *,
+    collection_mode: str,
+    query_banks: Dict[Tuple[int, int], QueryBank],
+    n_heads: int,
+    n_kv_heads: int,
+    observed_positions: int,
+    query_weighting: str,
+    prompt_source: Optional[str],
+    prompt_text: str,
+    continuation_text: str,
+) -> dict:
+    """Summarize evidence density relative to the available query opportunities."""
+    qpk = n_heads // n_kv_heads
+    retained_queries = len(next(iter(query_banks.values()))) if query_banks else 0
+    return {
+        "collection_mode": collection_mode,
+        "query_weighting": query_weighting,
+        "prompt_source": prompt_source,
+        "prompt_characters": len(prompt_text),
+        "continuation_characters": len(continuation_text),
+        "observed_positions": observed_positions,
+        "query_heads_per_kv_head": qpk,
+        "raw_query_vectors_per_bank": observed_positions * qpk,
+        "retained_query_vectors_per_bank": retained_queries,
+        "retained_position_equivalent": retained_queries / qpk if qpk > 0 else 0.0,
+        "retained_opportunity_fraction": (
+            ((retained_queries / qpk) / max(observed_positions, 1)) if qpk > 0 else 0.0
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -747,8 +927,11 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model",   default="Qwen/Qwen2.5-3B")
     p.add_argument("--device",  default="cuda" if torch.cuda.is_available() else "cpu")
-    p.add_argument("--collection-mode", choices=["prefill", "online"], default="online")
+    p.add_argument("--collection-mode", choices=["prefill", "repeat-prefill", "teacher-forced", "online"], default="online")
     p.add_argument("--query-weighting", choices=["uniform", "recency"], default=None)
+    p.add_argument("--prompt-file", default=None)
+    p.add_argument("--prefix-turns", type=int, default=8)
+    p.add_argument("--continuation-turns", type=int, default=4)
     p.add_argument("--layers",  nargs="+", type=int,   default=[4, 12, 20, 28])
     p.add_argument("--budgets", nargs="+", type=float, default=[0.25, 0.5])
     p.add_argument("--mode", choices=["full", "focused"], default="focused")
@@ -785,6 +968,11 @@ def build_prompt() -> str:
             "for a distributed warehouse management system with partial fault tolerance.")
 
 
+def build_repeat_prefill_prompt(prompt: str) -> str:
+    """Construct the cheap explicit-query control prompt used by repeat-prefill."""
+    return f"{prompt}\n\nRepeat it.\n\n{prompt}"
+
+
 def main():
     args = parse_args()
     torch.manual_seed(args.seed)
@@ -795,7 +983,30 @@ def main():
     print(f"  Heads: {n_heads} query / {n_kv_heads} KV  "
           f"(GQA {n_heads // n_kv_heads}x per KV head)")
 
-    prompt = build_prompt()
+    smoke_data_path = REPO_ROOT.parent / "kv_compaction_experiment" / "data" / "smoke_test"
+    prompt_source: Optional[str] = None
+    if args.prompt_file is not None:
+        prompt_path = Path(args.prompt_file)
+        if not prompt_path.is_absolute():
+            prompt_path = smoke_data_path / args.prompt_file
+        prompt_source = prompt_path.name
+        prompt, continuation_text = load_prompt_segments_from_file(
+            prompt_path,
+            prefix_turns=args.prefix_turns,
+            continuation_turns=args.continuation_turns,
+        )
+    elif args.collection_mode == "teacher-forced":
+        prompt_path = smoke_data_path / "near_capacity_dispatch_safe.json"
+        prompt_source = prompt_path.name
+        prompt, continuation_text = load_prompt_segments_from_file(
+            prompt_path,
+            prefix_turns=args.prefix_turns,
+            continuation_turns=args.continuation_turns,
+        )
+        print(f"  Teacher-forced prompt source: {prompt_path.name}", flush=True)
+    else:
+        prompt = build_prompt()
+        continuation_text = ""
     weighting_scheme = args.query_weighting or (
         "recency" if args.collection_mode == "online" else "uniform"
     )
@@ -803,9 +1014,16 @@ def main():
     print(f"\nCollecting KV + queries for layers {args.layers} ...", flush=True)
     t0 = time.time()
     query_banks: Dict[Tuple[int, int], QueryBank]
-    if args.collection_mode == "prefill":
-        kv_states, query_states = extract_kv_and_queries(
+    observed_positions: int
+    if args.collection_mode in {"prefill", "repeat-prefill"}:
+        kv_states = extract_kv_states_from_prompt(
             model, tokenizer, prompt, args.device, args.layers
+        )
+        query_prompt = (
+            prompt if args.collection_mode == "prefill" else build_repeat_prefill_prompt(prompt)
+        )
+        query_states = extract_query_states_from_prompt(
+            model, tokenizer, query_prompt, args.device, args.layers
         )
         query_banks = {}
         for layer_idx in args.layers:
@@ -813,7 +1031,29 @@ def main():
                 query_banks[(layer_idx, kv_head)] = build_query_bank(
                     query_states[layer_idx], kv_head, n_heads, n_kv_heads, bank_cfg
                 )
-        print("  Collection mode: prefill proxy", flush=True)
+        observed_positions = int(query_states[args.layers[0]].shape[1])
+        label = "prefill proxy" if args.collection_mode == "prefill" else "repeat-prefill control"
+        print(f"  Collection mode: {label}", flush=True)
+    elif args.collection_mode == "teacher-forced":
+        continuation_token_ids = extract_teacher_forced_continuation_ids(
+            tokenizer,
+            prompt,
+            continuation_text,
+        )
+        print(f"  Teacher-forced continuation tokens: {len(continuation_token_ids)}", flush=True)
+        kv_states, query_banks, observed_tokens = collect_teacher_forced_kv_and_query_banks(
+            model,
+            tokenizer,
+            prompt,
+            continuation_token_ids,
+            args.device,
+            args.layers,
+            bank_cfg,
+            prefill_chunk_size=args.prefill_chunk_size,
+            max_continuation_tokens=args.max_new_tokens,
+        )
+        observed_positions = observed_tokens
+        print(f"  Collection mode: teacher-forced decode ({observed_tokens} observed tokens)", flush=True)
     else:
         kv_states, query_banks, generated_tokens = collect_online_kv_and_query_banks(
             model,
@@ -825,8 +1065,28 @@ def main():
             max_new_tokens=args.max_new_tokens,
             prefill_chunk_size=args.prefill_chunk_size,
         )
+        observed_positions = generated_tokens
         print(f"  Collection mode: online decode ({generated_tokens} observed tokens)", flush=True)
     print(f"  Query weighting: {weighting_scheme}", flush=True)
+    collection_meta = summarize_collection_meta(
+        collection_mode=args.collection_mode,
+        query_banks=query_banks,
+        n_heads=n_heads,
+        n_kv_heads=n_kv_heads,
+        observed_positions=observed_positions,
+        query_weighting=weighting_scheme,
+        prompt_source=prompt_source,
+        prompt_text=prompt,
+        continuation_text=continuation_text,
+    )
+    print(
+        "  Evidence: "
+        f"positions={collection_meta['observed_positions']}  "
+        f"raw/bank={collection_meta['raw_query_vectors_per_bank']}  "
+        f"retained/bank={collection_meta['retained_query_vectors_per_bank']}  "
+        f"retained_fraction={collection_meta['retained_opportunity_fraction']:.4f}",
+        flush=True,
+    )
     print(f"  Done in {time.time()-t0:.1f}s")
 
     beta_cfg = BetaFitConfig(
@@ -905,6 +1165,8 @@ def main():
         Path(args.save_json).write_text(
             json.dumps(
                 {
+                    "args": vars(args),
+                    "collection_meta": collection_meta,
                     "results": [asdict(r) for r in all_results],
                     "good_support_diagnostics": [asdict(d) for d in all_support_diagnostics],
                     "refit_diagnostics": [asdict(d) for d in all_diagnostics],

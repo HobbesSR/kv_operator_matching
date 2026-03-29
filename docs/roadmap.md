@@ -4,7 +4,7 @@ This document describes the phased development plan. Phases are ordered by depen
 
 ---
 
-## Phase 1 (Current): Foundations
+## Phase 1 (Complete): Foundations
 
 **Goal**: Get a working, well-documented scaffold that correctly implements the N/Z objectives and enables the first real experiment.
 
@@ -12,12 +12,12 @@ Tasks:
 - [x] Repo scaffolding and directory structure
 - [x] Core theory documentation (`docs/theory_sketch.md`)
 - [x] Roadmap and relationship docs
-- [ ] Core objective implementations: `compute_z`, `compute_n`, `compute_response`, `loss_z`, `loss_n`, `loss_lin`, `loss_true_response`
-- [ ] Empirical query bank with recency weighting and max-size trimming
-- [ ] Fixed-support beta-fit: placeholder NNLS (scipy `nnls` or projected gradient)
-- [ ] Baseline stubs: recency, attention-mass, uniform selection
-- [ ] Verification gate: holdout response-error check
-- [ ] Qwen 2 experiment scaffold: config, argument parsing, inference loop skeleton
+- [x] Core objective implementations: `compute_z`, `compute_n`, `compute_response`, `loss_z`, `loss_n`, `loss_lin`, `loss_true_response`
+- [x] Empirical query bank with recency weighting and max-size trimming
+- [x] Fixed-support beta-fit scaffold and anchored value-fit variants
+- [x] Baselines: recency, attention-mass, uniform selection
+- [x] Verification gate: holdout response-error check
+- [x] Qwen 2 experiment scaffold: config, argument parsing, inference loop skeleton
 - [ ] Basic unit tests for objectives (correctness on trivial cases)
 
 Deliverable: a repo where the objectives are implemented, the query bank runs, and the experiment scaffold is in place — even if end-to-end inference is not yet wired.
@@ -29,8 +29,10 @@ Deliverable: a repo where the objectives are implemented, the query bank runs, a
 **Goal**: Run the first real comparison of beta-refit vs. baselines on Qwen 2 with live query evidence.
 
 Tasks:
-- [ ] Wire up live query collection hooks in the Qwen 2 inference loop (adapt patterns from `kv_compaction_experiment`)
-- [ ] Add `repeat-prefill` reference query strategy as a control: run "Context. Repeat it. Context." prefill and extract query vectors. This is the paper's cheapest strong baseline (~8s for 60k tokens) and establishes a reference ceiling for what a good offline query bank can achieve.
+- [x] Wire up live query collection hooks in the Qwen 2 inference loop (adapt patterns from `kv_compaction_experiment`)
+- [x] Add `repeat-prefill` reference query strategy as a control: run "Context. Repeat it. Context." prefill and extract query vectors. This is the paper's cheapest strong baseline (~8s for 60k tokens) and establishes a reference ceiling for what a good offline query bank can achieve.
+- [x] Add `teacher-forced` decode as the middle collection regime between prefill and free online generation.
+- [x] Add collector parity and opportunity-accounting utilities for regime comparison.
 - [ ] Implement full baseline comparison pipeline:
   - Recency selection (no refit)
   - Attention-mass selection (no refit)
@@ -38,14 +40,15 @@ Tasks:
   - Attention-mass selection + beta-refit
   - Paper-style HighestAttnKeys + NNLS β + LS Cv (direct paper control)
   - Uniform selection (sanity check)
-- [ ] Held-out verification pipeline: split query bank into fit / holdout, evaluate L_true on holdout
-- [ ] Results logging and basic plots (response error vs. budget fraction, by baseline)
+- [x] Held-out verification pipeline: split query bank into fit / holdout, evaluate L_true on holdout
+- [x] Results logging (JSON per-head metrics and regime-comparison artifacts)
+- [ ] Basic plots (response error vs. budget fraction, by baseline)
 - [ ] Better support proposal logic:
   - Improve attention-mass selection to use the live query bank rather than uniform-query mass
   - Implement N/Z-aware greedy selection: greedily add support points to minimize L_lin
 - [ ] N/Z-aware greedy alternative to OMP: project residuals in N/Z space rather than attention space
 
-Deliverable: a results table showing beta-refit improves over baseline selection for at least one budget fraction, with verification passing on held-out queries.
+Current note: Phase 1 findings and corrected Phase 2 evidence-collection status now live in [phase2_evidence_collection.md](/home/csmith/projects/kv_operator_matching/docs/phase2_evidence_collection.md). The main open Phase 2 question is no longer whether the collection regimes exist, but which methods remain useful once online, teacher-forced, and repeat-prefill evidence are all available and parity-checked.
 
 ---
 

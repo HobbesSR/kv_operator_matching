@@ -1,6 +1,7 @@
 # Experiment: Qwen 2 Online N/Z Operator Matching
 
-**Status**: Runnable smoke harness. Supports both prefill-proxy and online decode-time query collection.
+**Status**: Runnable smoke harness. Supports `prefill`, `repeat-prefill`,
+`teacher-forced`, and `online` query collection modes.
 
 ---
 
@@ -16,6 +17,8 @@ Replicate the spirit of the Qwen 2 online experiment from `kv_compaction_experim
 2. **Run inference** on a set of evaluation prompts
 3. **Collect query vectors**:
    - `online`: prefill the prompt into cache, then capture decode-step queries during greedy generation
+   - `teacher-forced`: prefill the prompt into cache, then capture decode-step queries while feeding a fixed known continuation
+   - `repeat-prefill`: use `prompt + "Repeat it." + prompt` as a stronger offline control
    - `prefill`: use prompt queries as an offline proxy bank
 4. **Build the empirical query bank**: maintain a rolling bank of query vectors per head, weighted by recency (configurable)
 5. **At each KV boundary** (configurable checkpoint interval):
@@ -44,11 +47,16 @@ See `config.yaml` for the experiment parameters. Key knobs:
 - [x] Cache-aware online query collection loop
 - [x] KV cache extraction for Qwen 2
 - [x] Attention-mass support using the experiment query bank
+- [x] `repeat-prefill` control path
+- [x] `teacher-forced` decode control path
+- [x] Collector parity harness
+- [x] Opportunity-aware evidence accounting in experiment artifacts
 - [ ] Broader online evaluation over multiple prompts and boundaries
-- [ ] Add `repeat-prefill` control path
 - [ ] Port prompt loading / batching utilities
 - [ ] Port results logging (CSV / JSON per-head metrics)
 - [x] Wire up `QueryBank`, `beta_fit.fit_beta`, and `verification.verify` from `src/kv_operator_matching/`
+
+See [phase2_evidence_collection.md](/home/csmith/projects/kv_operator_matching/docs/phase2_evidence_collection.md) for the current task list and imported lessons from `kv_compaction_experiment`.
 
 ---
 
