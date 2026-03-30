@@ -334,6 +334,196 @@ def hybrid_support_baseline(
     )
 
 
+def hybrid_pairmerge_support_baseline(
+    head_state: HeadState,
+    query_bank: QueryBank,
+    budget: int,
+    config: HybridSelectorConfig | None = None,
+) -> CompactRepresentation:
+    """Hybrid selector over source-grounded original and adjacent-pair atoms.
+
+    Candidate pool:
+    - every original token as a singleton atom
+    - every adjacent pair `(i, i+1)` merged into one atom using simple means
+
+    Selection is conflict-aware: once an atom covering source positions
+    `[start, end]` is selected, no other candidate overlapping that span may be
+    selected. This keeps the support source-grounded and avoids double-counting
+    the same original KV entries through both singleton and merged atoms.
+    """
+    if config is None:
+        config = HybridSelectorConfig()
+
+    queries, weights = query_bank.get_weighted_bank()
+    keys = head_state.keys
+    values = head_state.values
+    n = keys.shape[0]
+    m = min(budget, n)
+    if m <= 0:
+        return CompactRepresentation(
+            support_keys=keys[:0],
+            support_values=values[:0],
+            betas=torch.ones(0, dtype=keys.dtype, device=keys.device),
+        )
+
+    queries_f = queries.float()
+    keys_f = keys.float()
+    values_f = values.float()
+    weights_f = weights.float()
+
+    singleton_keys = keys_f
+    singleton_values = values_f
+    singleton_starts = torch.arange(n, device=keys_f.device, dtype=torch.long)
+    singleton_ends = singleton_starts.clone()
+
+    if n > 1:
+        pair_keys = 0.5 * (keys_f[:-1] + keys_f[1:])
+        pair_values = 0.5 * (values_f[:-1] + values_f[1:])
+        pair_starts = torch.arange(n - 1, device=keys_f.device, dtype=torch.long)
+        pair_ends = pair_starts + 1
+
+        candidate_keys = torch.cat([singleton_keys, pair_keys], dim=0)
+        candidate_values = torch.cat([singleton_values, pair_values], dim=0)
+        candidate_starts = torch.cat([singleton_starts, pair_starts], dim=0)
+        candidate_ends = torch.cat([singleton_ends, pair_ends], dim=0)
+    else:
+        candidate_keys = singleton_keys
+        candidate_values = singleton_values
+        candidate_starts = singleton_starts
+        candidate_ends = singleton_ends
+
+    weighted_design, weighted_target = _build_candidate_mass_frame(
+        query_tensor=queries_f,
+        target_key_tensor=keys_f,
+        candidate_key_tensor=candidate_keys,
+        entry_weights=weights_f,
+    )
+    alpha, beta = hybrid_evidence_weights(
+        queries_f,
+        weights_f,
+        use_evidence_weights=config.use_evidence_weights,
+        fixed_alpha=config.fixed_alpha,
+        fixed_beta=config.fixed_beta,
+    )
+
+    selected_indices: list[int] = []
+    selected_mask = torch.zeros(candidate_keys.shape[0], dtype=torch.bool, device=keys_f.device)
+    occupied = torch.zeros(n, dtype=torch.bool, device=keys_f.device)
+    current_prediction = torch.zeros_like(weighted_target)
+    current_span_frac = 0.0
+    current_min = None
+    current_max = None
+
+    column_norm_sq = weighted_design.pow(2).sum(dim=0).clamp_min(1e-12)
+    normalized_candidate_keys = torch.nn.functional.normalize(candidate_keys, dim=1)
+
+    for _ in range(m):
+        residual = weighted_target - current_prediction
+        residual_energy = residual.pow(2).sum().clamp_min(1e-12)
+        corr = torch.matmul(weighted_design.T, residual)
+        delta_b = corr.clamp_min(0.0).pow(2) / (column_norm_sq * residual_energy)
+
+        if selected_indices:
+            selected_design = weighted_design[:, selected_indices]
+            q_basis = torch.linalg.qr(selected_design, mode="reduced").Q
+            projected = q_basis.T @ weighted_design
+            projected_norm_sq = projected.pow(2).sum(dim=0)
+            orth_norm_sq = (column_norm_sq - projected_norm_sq).clamp_min(0.0)
+            delta_q_coh = orth_norm_sq / column_norm_sq
+        else:
+            delta_q_coh = torch.ones_like(delta_b)
+
+        if config.use_delta_q_low_sv_risk and selected_indices:
+            left_singular, _s, _vh = torch.linalg.svd(selected_design, full_matrices=False)
+            coeff = left_singular.T @ weighted_design
+            projected_energy = coeff.pow(2).sum(dim=0)
+            cutoff = max(1, coeff.shape[0] // 4)
+            low_energy = coeff[-cutoff:].pow(2).sum(dim=0)
+            delta_q_low_sv_risk = torch.where(
+                projected_energy > 1e-12,
+                low_energy / projected_energy.clamp_min(1e-12),
+                torch.zeros_like(projected_energy),
+            )
+        else:
+            delta_q_low_sv_risk = torch.zeros_like(delta_b)
+
+        if config.use_delta_q_redundancy and selected_indices:
+            selected_key_basis = normalized_candidate_keys[selected_indices]
+            key_similarity = normalized_candidate_keys @ selected_key_basis.T
+            delta_q_redundancy = key_similarity.clamp_min(0.0).max(dim=1).values
+        else:
+            delta_q_redundancy = torch.zeros_like(delta_b)
+
+        if current_min is None or current_max is None:
+            new_span_frac = (candidate_ends - candidate_starts + 1).float() / max(n, 1)
+        else:
+            new_min = torch.minimum(candidate_starts, torch.full_like(candidate_starts, current_min))
+            new_max = torch.maximum(candidate_ends, torch.full_like(candidate_ends, current_max))
+            new_span_frac = (new_max - new_min + 1).float() / max(n, 1)
+        delta_q_span = (new_span_frac - current_span_frac).clamp_min(0.0)
+
+        occupied_prefix = torch.cat(
+            [
+                torch.zeros(1, device=occupied.device, dtype=torch.long),
+                occupied.to(dtype=torch.long).cumsum(dim=0),
+            ]
+        )
+        overlap = (occupied_prefix[candidate_ends + 1] - occupied_prefix[candidate_starts]) > 0
+
+        score = torch.zeros_like(delta_b)
+        if config.use_delta_b:
+            score = score + delta_b
+        if config.use_delta_q_coh:
+            score = score + alpha * delta_q_coh
+        if config.use_delta_q_span:
+            score = score - beta * delta_q_span
+        if config.use_delta_q_low_sv_risk:
+            score = score - beta * delta_q_low_sv_risk
+        if config.use_delta_q_redundancy:
+            score = score - beta * delta_q_redundancy
+        score[selected_mask | overlap] = -float("inf")
+
+        index = int(torch.argmax(score).item())
+        if not math.isfinite(float(score[index].item())):
+            break
+
+        selected_indices.append(index)
+        selected_mask[index] = True
+        start = int(candidate_starts[index].item())
+        end = int(candidate_ends[index].item())
+        occupied[start : end + 1] = True
+        current_min = start if current_min is None else min(current_min, start)
+        current_max = end if current_max is None else max(current_max, end)
+        current_span_frac = float(((current_max - current_min + 1) / max(n, 1)))
+
+        selected_design = weighted_design[:, selected_indices]
+        scale = torch.linalg.lstsq(
+            selected_design,
+            weighted_target.unsqueeze(1),
+            driver="gels",
+        ).solution.squeeze(1)
+        scale = scale.clamp_min(1e-12)
+        current_prediction = selected_design @ scale
+
+    if not selected_indices:
+        return hybrid_support_baseline(head_state, query_bank, budget, config)
+
+    index_tensor = torch.tensor(selected_indices, device=keys.device, dtype=torch.long)
+    support_keys = candidate_keys[index_tensor].to(dtype=keys.dtype, device=keys.device)
+    support_values = candidate_values[index_tensor].to(dtype=values.dtype, device=values.device)
+    selected_design = weighted_design[:, selected_indices]
+    betas = torch.linalg.lstsq(
+        selected_design,
+        weighted_target.unsqueeze(1),
+        driver="gels",
+    ).solution.squeeze(1).clamp_min(1e-12).to(dtype=keys.dtype, device=keys.device)
+    return CompactRepresentation(
+        support_keys=support_keys,
+        support_values=support_values,
+        betas=betas,
+    )
+
+
 def _select_keys_with_omp(
     *,
     key_tensor: torch.Tensor,
@@ -394,6 +584,25 @@ def _build_mass_frame(
     target = exp_scores.sum(dim=1)
     row_weights = torch.sqrt(torch.clamp_min(entry_weights.to(dtype=torch.float32), 0.0))
     weighted_design = exp_scores * row_weights.unsqueeze(1)
+    weighted_target = target * row_weights
+    return weighted_design, weighted_target
+
+
+def _build_candidate_mass_frame(
+    query_tensor: torch.Tensor,
+    target_key_tensor: torch.Tensor,
+    candidate_key_tensor: torch.Tensor,
+    entry_weights: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Build the stable exp-logit mass frame for a constructed candidate pool."""
+    inv_sqrt_d = 1.0 / math.sqrt(max(int(query_tensor.shape[1]), 1))
+    target_logits = (query_tensor @ target_key_tensor.T) * inv_sqrt_d
+    reference_max = target_logits.max(dim=1, keepdim=True).values
+    target = torch.exp(target_logits - reference_max).sum(dim=1)
+    candidate_logits = (query_tensor @ candidate_key_tensor.T) * inv_sqrt_d
+    candidate_exp_scores = torch.exp(candidate_logits - reference_max)
+    row_weights = torch.sqrt(torch.clamp_min(entry_weights.to(dtype=torch.float32), 0.0))
+    weighted_design = candidate_exp_scores * row_weights.unsqueeze(1)
     weighted_target = target * row_weights
     return weighted_design, weighted_target
 

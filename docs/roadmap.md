@@ -129,6 +129,11 @@ Tasks:
   after the failed third-term tranches.
 - [ ] Phase 3B: implement K-means-style support proposal: cluster key vectors, use cluster centroids as support keys, fit values and betas jointly
 - [ ] Phase 3B: implement exponential-family merge: given two KV pairs, compute a merged point that matches the first two moments of their contribution to Z and N
+- [x] Phase 3B negative tranche: test a first source-grounded constructed
+  substrate (original tokens plus adjacent pair merges under the fixed
+  `ΔB + ΔQ_coh` selector), and record that it is a live substrate shift but
+  does not improve the original-token hybrid on either the broad surface or the
+  denser richer-regime slice.
 - [ ] Empirical tests of response sparsity (Open Question 1 from theory sketch)
 - [ ] Empirical tests of spectral decay in the query-key kernel matrix (Open Question 2)
 - [ ] Positional encoding interaction study: does RoPE structure in key vectors affect support quality? (Open Question 5)
@@ -144,6 +149,17 @@ The corrected Phase 3A result is:
 - it can beat OMP on sparse online surfaces
 - but raw span, evidence-dependent weighting, and the direct low-singular-risk
   and redundancy replacements do not yet clearly earn their place
+
+Current Phase 3B note: the first constructed-support tranche lives in
+[phase3b_pairmerge.md](/home/csmith/projects/kv_operator_matching/docs/phase3b_pairmerge.md).
+Its conclusion is negative but useful:
+
+- a conflict-aware selector over original tokens plus adjacent pair merges is a
+  real substrate shift and uses merged atoms materially
+- but this simple adjacent-pair mean construction does not beat the
+  original-token hybrid selector
+- the next Phase 3B construction family should therefore change the merge rule,
+  not merely tweak the same adjacent-pair family
 
 Deliverable: a hybrid support strategy that outperforms the best fixed selector on the relevant evidence surfaces, plus at least one merged or synthetic support method that inherits that tradeoff instead of hard-coding a single regime.
 
