@@ -24,47 +24,105 @@ Deliverable: a repo where the objectives are implemented, the query bank runs, a
 
 ---
 
-## Phase 2: Baseline Comparison Pipeline
+## Phase 2 (Current): Evidence-Regime and Support-Tradeoff Mapping
 
-**Goal**: Run the first real comparison of beta-refit vs. baselines on Qwen 2 with live query evidence.
+**Goal**: Map how support quality, repairability, and evidence regime interact on Qwen 2 under the N/Z framing.
 
 Tasks:
 - [x] Wire up live query collection hooks in the Qwen 2 inference loop (adapt patterns from `kv_compaction_experiment`)
 - [x] Add `repeat-prefill` reference query strategy as a control: run "Context. Repeat it. Context." prefill and extract query vectors. This is the paper's cheapest strong baseline (~8s for 60k tokens) and establishes a reference ceiling for what a good offline query bank can achieve.
 - [x] Add `teacher-forced` decode as the middle collection regime between prefill and free online generation.
 - [x] Add collector parity and opportunity-accounting utilities for regime comparison.
-- [ ] Implement full baseline comparison pipeline:
+- [x] Implement working baseline comparison pipeline with:
   - Recency selection (no refit)
   - Attention-mass selection (no refit)
   - Recency selection + beta-refit
   - Attention-mass selection + beta-refit
-  - Paper-style HighestAttnKeys + NNLS β + LS Cv (direct paper control)
+  - OMP-style support selection + anchored value refit
   - Uniform selection (sanity check)
 - [x] Held-out verification pipeline: split query bank into fit / holdout, evaluate L_true on holdout
 - [x] Results logging (JSON per-head metrics and regime-comparison artifacts)
 - [ ] Basic plots (response error vs. budget fraction, by baseline)
-- [ ] Better support proposal logic:
-  - Improve attention-mass selection to use the live query bank rather than uniform-query mass
-  - Implement N/Z-aware greedy selection: greedily add support points to minimize L_lin
+- [x] Comparative support forensics:
+  - repair-substrate geometry
+  - weak-direction drift exposure
+  - baseline-quality versus repairability tradeoff
+- [ ] Downstream QA comparison against the motivating paper surface
+- [ ] Richer query-bank controls closer to self-study + repeat-prefill
 - [ ] N/Z-aware greedy alternative to OMP: project residuals in N/Z space rather than attention space
 
-Current note: Phase 1 findings and corrected Phase 2 evidence-collection status now live in [phase2_evidence_collection.md](/home/csmith/projects/kv_operator_matching/docs/phase2_evidence_collection.md). The main open Phase 2 question is no longer whether the collection regimes exist, but which methods remain useful once online, teacher-forced, and repeat-prefill evidence are all available and parity-checked.
+Current note: the Phase 2 findings and supporting artifacts live in [phase2_evidence_collection.md](/home/csmith/projects/kv_operator_matching/docs/phase2_evidence_collection.md). The main result is no longer just "which method wins", but:
+
+- baseline support quality and repair substrate quality are distinct axes
+- their tradeoff depends on continuous evidence properties, not just named regimes
+- sparse online evidence currently favors recency-like coherent supports for local value repair
+- richer decode-like evidence allows OMP-like baseline quality to matter more
+
+Phase 2 deliverable is therefore not a single final selector. It is a mapped tradeoff surface and a set of predictive evidence/support proxies that justify a continuous hybrid selector in Phase 3.
 
 ---
 
-## Phase 3: Merged and Synthetic Support
+## Phase 3: Hybrid Support Objective and Constructed Support
 
-**Goal**: Move beyond selecting support from the existing KV cache to generating support points that do not correspond to individual tokens.
+**Goal**: Build a single support-selection strategy whose behavior changes continuously with the observed evidence state, then extend it to merged or synthetic support.
+
+Phase 2 suggests the right family is:
+
+`J(S; E) = B(S) + alpha(E) * R(S; E) - beta(E) * C(S; E)`
+
+where:
+- `B(S)` is baseline support quality
+- `R(S; E)` is repairability under evidence state `E`
+- `C(S; E)` is instability / spread cost
+- `alpha(E), beta(E)` are continuous weights driven by observed evidence properties
+
+The evidence state should be represented by continuous proxies rather than hard labels, for example:
+- support-normalized stable rank
+- weak-direction drift risk / low-singular update share
+- evidence density / opportunity coverage
+- query diversity / occupancy
+- support span / locality / age dispersion
+
+Interpretation note:
+
+- the tree is the persistent support manifold
+- the hybrid objective is the frontier policy over that manifold
+- online evidence should update local split/collapse values and a rolling
+  evidence-state vector, not trigger a global support search after every token
+
+That means Phase 3 naturally splits into:
+- basis construction: build a sensible hierarchical atom structure
+- frontier policy: maintain local split/collapse preferences from online stats
 
 Tasks:
-- [ ] Implement K-means-style support proposal: cluster key vectors, use cluster centroids as support keys, fit values and betas jointly
-- [ ] Implement exponential-family merge: given two KV pairs, compute a merged point that matches the first two moments of their contribution to Z and N
+- [ ] Phase 3A handoff checkpoint: keep the first target narrow and explicit.
+  The first selector should use only original-token candidates and answer one
+  question: can one continuous hybrid selector interpolate between recency-like
+  and OMP-like behavior as evidence-state changes, without hand-switching
+  regimes?
+- [ ] Phase 3A: implement a first hybrid selector with score
+  `J_add = ΔB + alpha(E) * ΔQ_coh - beta(E) * ΔQ_span`
+  where:
+  - `ΔB` is baseline-fidelity gain
+  - `ΔQ_coh` is a repairability / coherence proxy with stable-rank improvement
+    as the main term
+  - `ΔQ_span` is a spread penalty, starting with temporal/support span
+- [ ] Phase 3A constraint: keep this as a single selector, not a hidden
+  regime switch.
+- [ ] Phase 3A constraint: `alpha(E)` and `beta(E)` must be functions of
+  continuous observables already available in the harness.
+- [ ] Phase 3A constraint: do not introduce merged or synthetic atoms in the
+  first selector.
+- [ ] Phase 3A: evaluate whether the continuous selector moves between
+  recency-like and OMP-like behavior as evidence-state changes.
+- [ ] Phase 3B: implement K-means-style support proposal: cluster key vectors, use cluster centroids as support keys, fit values and betas jointly
+- [ ] Phase 3B: implement exponential-family merge: given two KV pairs, compute a merged point that matches the first two moments of their contribution to Z and N
 - [ ] Empirical tests of response sparsity (Open Question 1 from theory sketch)
 - [ ] Empirical tests of spectral decay in the query-key kernel matrix (Open Question 2)
 - [ ] Positional encoding interaction study: does RoPE structure in key vectors affect support quality? (Open Question 5)
 - [ ] More principled merge proposal logic: conditions under which a good merge exists (toward Open Question 6)
 
-Deliverable: at least one synthetic support method that improves over best Phase 2 baseline at tight budgets.
+Deliverable: a hybrid support strategy that outperforms the best fixed selector on the relevant evidence surfaces, plus at least one merged or synthetic support method that inherits that tradeoff instead of hard-coding a single regime.
 
 ---
 
@@ -78,12 +136,12 @@ High-level direction:
 - **Dynamic resolution policy**: decide at each checkpoint whether to refit, which resolution to use, and how to trade off memory vs. accuracy — based on live query evidence
 - **Learned router**: a small model that predicts the best resolution given context signals
 
-Why this is Phase 4 and not earlier: the N/Z formalism is already *algebraically compatible* with progressive and tree-structured representations — the concatenation property and the admissible representation class both support it (see `docs/theory_sketch.md` Section 8). What Phase 4 requires that the current formalism does not yet supply is (a) a construction rule for merged or synthetic atoms, (b) empirical evidence that the operator is compressible enough to justify hierarchy, and (c) a policy for dynamic resolution. Phases 2-3 must answer (a) and (b) before Phase 4 is worth designing in detail.
+Why this is Phase 4 and not earlier: the N/Z formalism is already *algebraically compatible* with progressive and tree-structured representations — the concatenation property and the admissible representation class both support it (see `docs/theory_sketch.md` Section 8). What Phase 4 requires that the current formalism does not yet supply is (a) a construction rule for merged or synthetic atoms, (b) a hybrid support objective worth applying recursively, and (c) empirical evidence that the operator is compressible enough to justify hierarchy. Phases 2-3 must answer those first.
 
 ---
 
 ## Notes on Priority
 
-- Phases 1 and 2 are the research core. Everything else is dependent on them working.
-- Phase 3 is the natural extension if Phase 2 shows beta-refit helps.
+- Phases 1 and 2 establish the evidence and tradeoff surface. Everything else depends on that map being trustworthy.
+- Phase 3 is now the natural extension because Phase 2 identified a structural tradeoff between baseline quality and repairability, not because a single selector already solved the problem.
 - Phase 4 is the long-term vision. It should inform design decisions in Phases 1-3 (keep the concatenation property central, keep Z and N as separate objects) but should not drive implementation now.
