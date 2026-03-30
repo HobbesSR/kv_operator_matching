@@ -170,6 +170,17 @@ The next conservative follow-up also produced a useful negative result in
   almost reverted to the original-token hybrid
 - so this is not yet a meaningful constructed-support win either
 
+The next cheap precursor in
+[phase3b_candidate_geometry.md](/home/csmith/projects/kv_operator_matching/docs/phase3b_candidate_geometry.md)
+also narrowed the path:
+
+- a locality-constrained operator-role compatibility score does surface a much
+  richer non-adjacent local pool than strict adjacency
+- but in its current form it does not beat adjacency broadly as the top local
+  partner rule
+- so the next step should improve the compatibility score itself before another
+  full merge-construction tranche
+
 Deliverable: a hybrid support strategy that outperforms the best fixed selector on the relevant evidence surfaces, plus at least one merged or synthetic support method that inherits that tradeoff instead of hard-coding a single regime.
 
 ---
