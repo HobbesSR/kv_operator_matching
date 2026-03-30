@@ -181,6 +181,16 @@ also narrowed the path:
 - so the next step should improve the compatibility score itself before another
   full merge-construction tranche
 
+The next cheap score iteration in
+[phase3b_candidate_geometry_rerank.md](/home/csmith/projects/kv_operator_matching/docs/phase3b_candidate_geometry_rerank.md)
+also failed cleanly:
+
+- stronger locality regularization chose closer partners
+- but it further reduced candidate richness and still failed to beat adjacency
+  as a top partner rule
+- so the cheap local-pair scoring path now looks exhausted enough that the next
+  3B move should change the framing, not just retune the same score
+
 Deliverable: a hybrid support strategy that outperforms the best fixed selector on the relevant evidence surfaces, plus at least one merged or synthetic support method that inherits that tradeoff instead of hard-coding a single regime.
 
 ---
