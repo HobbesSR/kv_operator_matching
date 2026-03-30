@@ -161,6 +161,15 @@ Its conclusion is negative but useful:
 - the next Phase 3B construction family should therefore change the merge rule,
   not merely tweak the same adjacent-pair family
 
+The next conservative follow-up also produced a useful negative result in
+[phase3b_fitted_pairmerge.md](/home/csmith/projects/kv_operator_matching/docs/phase3b_fitted_pairmerge.md):
+
+- compatibility-filtered, locally fitted adjacent-pair representatives beat the
+  failed mean-merge family
+- but mostly by over-pruning the candidate pool so hard that the selector
+  almost reverted to the original-token hybrid
+- so this is not yet a meaningful constructed-support win either
+
 Deliverable: a hybrid support strategy that outperforms the best fixed selector on the relevant evidence surfaces, plus at least one merged or synthetic support method that inherits that tradeoff instead of hard-coding a single regime.
 
 ---

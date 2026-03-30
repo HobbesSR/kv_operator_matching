@@ -392,136 +392,137 @@ def hybrid_pairmerge_support_baseline(
         candidate_starts = singleton_starts
         candidate_ends = singleton_ends
 
-    weighted_design, weighted_target = _build_candidate_mass_frame(
+    return _hybrid_support_over_candidate_pool(
+        target_keys=keys,
         query_tensor=queries_f,
-        target_key_tensor=keys_f,
-        candidate_key_tensor=candidate_keys,
         entry_weights=weights_f,
+        candidate_keys=candidate_keys,
+        candidate_values=candidate_values,
+        candidate_starts=candidate_starts,
+        candidate_ends=candidate_ends,
+        budget=m,
+        config=config,
+        fallback_rep=hybrid_support_baseline(head_state, query_bank, budget, config),
     )
-    alpha, beta = hybrid_evidence_weights(
-        queries_f,
-        weights_f,
-        use_evidence_weights=config.use_evidence_weights,
-        fixed_alpha=config.fixed_alpha,
-        fixed_beta=config.fixed_beta,
-    )
 
-    selected_indices: list[int] = []
-    selected_mask = torch.zeros(candidate_keys.shape[0], dtype=torch.bool, device=keys_f.device)
-    occupied = torch.zeros(n, dtype=torch.bool, device=keys_f.device)
-    current_prediction = torch.zeros_like(weighted_target)
-    current_span_frac = 0.0
-    current_min = None
-    current_max = None
 
-    column_norm_sq = weighted_design.pow(2).sum(dim=0).clamp_min(1e-12)
-    normalized_candidate_keys = torch.nn.functional.normalize(candidate_keys, dim=1)
+def hybrid_fitted_pairmerge_support_baseline(
+    head_state: HeadState,
+    query_bank: QueryBank,
+    budget: int,
+    config: HybridSelectorConfig | None = None,
+    *,
+    mass_cos_threshold: float = 0.95,
+    value_cos_threshold: float = 0.75,
+) -> CompactRepresentation:
+    """Hybrid selector over original tokens plus fitted adjacent-pair atoms."""
+    if config is None:
+        config = HybridSelectorConfig()
 
-    for _ in range(m):
-        residual = weighted_target - current_prediction
-        residual_energy = residual.pow(2).sum().clamp_min(1e-12)
-        corr = torch.matmul(weighted_design.T, residual)
-        delta_b = corr.clamp_min(0.0).pow(2) / (column_norm_sq * residual_energy)
-
-        if selected_indices:
-            selected_design = weighted_design[:, selected_indices]
-            q_basis = torch.linalg.qr(selected_design, mode="reduced").Q
-            projected = q_basis.T @ weighted_design
-            projected_norm_sq = projected.pow(2).sum(dim=0)
-            orth_norm_sq = (column_norm_sq - projected_norm_sq).clamp_min(0.0)
-            delta_q_coh = orth_norm_sq / column_norm_sq
-        else:
-            delta_q_coh = torch.ones_like(delta_b)
-
-        if config.use_delta_q_low_sv_risk and selected_indices:
-            left_singular, _s, _vh = torch.linalg.svd(selected_design, full_matrices=False)
-            coeff = left_singular.T @ weighted_design
-            projected_energy = coeff.pow(2).sum(dim=0)
-            cutoff = max(1, coeff.shape[0] // 4)
-            low_energy = coeff[-cutoff:].pow(2).sum(dim=0)
-            delta_q_low_sv_risk = torch.where(
-                projected_energy > 1e-12,
-                low_energy / projected_energy.clamp_min(1e-12),
-                torch.zeros_like(projected_energy),
-            )
-        else:
-            delta_q_low_sv_risk = torch.zeros_like(delta_b)
-
-        if config.use_delta_q_redundancy and selected_indices:
-            selected_key_basis = normalized_candidate_keys[selected_indices]
-            key_similarity = normalized_candidate_keys @ selected_key_basis.T
-            delta_q_redundancy = key_similarity.clamp_min(0.0).max(dim=1).values
-        else:
-            delta_q_redundancy = torch.zeros_like(delta_b)
-
-        if current_min is None or current_max is None:
-            new_span_frac = (candidate_ends - candidate_starts + 1).float() / max(n, 1)
-        else:
-            new_min = torch.minimum(candidate_starts, torch.full_like(candidate_starts, current_min))
-            new_max = torch.maximum(candidate_ends, torch.full_like(candidate_ends, current_max))
-            new_span_frac = (new_max - new_min + 1).float() / max(n, 1)
-        delta_q_span = (new_span_frac - current_span_frac).clamp_min(0.0)
-
-        occupied_prefix = torch.cat(
-            [
-                torch.zeros(1, device=occupied.device, dtype=torch.long),
-                occupied.to(dtype=torch.long).cumsum(dim=0),
-            ]
+    queries, weights = query_bank.get_weighted_bank()
+    keys = head_state.keys
+    values = head_state.values
+    n = keys.shape[0]
+    m = min(budget, n)
+    if m <= 0:
+        return CompactRepresentation(
+            support_keys=keys[:0],
+            support_values=values[:0],
+            betas=torch.ones(0, dtype=keys.dtype, device=keys.device),
         )
-        overlap = (occupied_prefix[candidate_ends + 1] - occupied_prefix[candidate_starts]) > 0
 
-        score = torch.zeros_like(delta_b)
-        if config.use_delta_b:
-            score = score + delta_b
-        if config.use_delta_q_coh:
-            score = score + alpha * delta_q_coh
-        if config.use_delta_q_span:
-            score = score - beta * delta_q_span
-        if config.use_delta_q_low_sv_risk:
-            score = score - beta * delta_q_low_sv_risk
-        if config.use_delta_q_redundancy:
-            score = score - beta * delta_q_redundancy
-        score[selected_mask | overlap] = -float("inf")
+    queries_f = queries.float()
+    keys_f = keys.float()
+    values_f = values.float()
+    weights_f = weights.float()
 
-        index = int(torch.argmax(score).item())
-        if not math.isfinite(float(score[index].item())):
-            break
+    singleton_keys = keys_f
+    singleton_values = values_f
+    singleton_starts = torch.arange(n, device=keys_f.device, dtype=torch.long)
+    singleton_ends = singleton_starts.clone()
 
-        selected_indices.append(index)
-        selected_mask[index] = True
-        start = int(candidate_starts[index].item())
-        end = int(candidate_ends[index].item())
-        occupied[start : end + 1] = True
-        current_min = start if current_min is None else min(current_min, start)
-        current_max = end if current_max is None else max(current_max, end)
-        current_span_frac = float(((current_max - current_min + 1) / max(n, 1)))
-
-        selected_design = weighted_design[:, selected_indices]
-        scale = torch.linalg.lstsq(
-            selected_design,
-            weighted_target.unsqueeze(1),
-            driver="gels",
-        ).solution.squeeze(1)
-        scale = scale.clamp_min(1e-12)
-        current_prediction = selected_design @ scale
-
-    if not selected_indices:
-        return hybrid_support_baseline(head_state, query_bank, budget, config)
-
-    index_tensor = torch.tensor(selected_indices, device=keys.device, dtype=torch.long)
-    support_keys = candidate_keys[index_tensor].to(dtype=keys.dtype, device=keys.device)
-    support_values = candidate_values[index_tensor].to(dtype=values.dtype, device=values.device)
-    selected_design = weighted_design[:, selected_indices]
-    betas = torch.linalg.lstsq(
-        selected_design,
-        weighted_target.unsqueeze(1),
-        driver="gels",
-    ).solution.squeeze(1).clamp_min(1e-12).to(dtype=keys.dtype, device=keys.device)
-    return CompactRepresentation(
-        support_keys=support_keys,
-        support_values=support_values,
-        betas=betas,
+    eligible_pairs, _mass_cos, _value_cos = compute_adjacent_pair_compatibility(
+        head_state,
+        query_bank,
+        mass_cos_threshold=mass_cos_threshold,
+        value_cos_threshold=value_cos_threshold,
     )
+    eligible_indices = torch.nonzero(eligible_pairs, as_tuple=False).squeeze(1)
+
+    if eligible_indices.numel() > 0:
+        fitted_pair_keys = []
+        fitted_pair_values = []
+        for pair_idx in eligible_indices.tolist():
+            pair_key, pair_value = _fit_adjacent_pair_representative(
+                query_tensor=queries_f,
+                entry_weights=weights_f,
+                left_key=keys_f[pair_idx],
+                right_key=keys_f[pair_idx + 1],
+                left_value=values_f[pair_idx],
+                right_value=values_f[pair_idx + 1],
+            )
+            fitted_pair_keys.append(pair_key.unsqueeze(0))
+            fitted_pair_values.append(pair_value.unsqueeze(0))
+
+        pair_keys = torch.cat(fitted_pair_keys, dim=0)
+        pair_values = torch.cat(fitted_pair_values, dim=0)
+        pair_starts = eligible_indices.to(dtype=torch.long, device=keys_f.device)
+        pair_ends = pair_starts + 1
+
+        candidate_keys = torch.cat([singleton_keys, pair_keys], dim=0)
+        candidate_values = torch.cat([singleton_values, pair_values], dim=0)
+        candidate_starts = torch.cat([singleton_starts, pair_starts], dim=0)
+        candidate_ends = torch.cat([singleton_ends, pair_ends], dim=0)
+    else:
+        candidate_keys = singleton_keys
+        candidate_values = singleton_values
+        candidate_starts = singleton_starts
+        candidate_ends = singleton_ends
+
+    return _hybrid_support_over_candidate_pool(
+        target_keys=keys,
+        query_tensor=queries_f,
+        entry_weights=weights_f,
+        candidate_keys=candidate_keys,
+        candidate_values=candidate_values,
+        candidate_starts=candidate_starts,
+        candidate_ends=candidate_ends,
+        budget=m,
+        config=config,
+        fallback_rep=hybrid_support_baseline(head_state, query_bank, budget, config),
+    )
+
+
+def compute_adjacent_pair_compatibility(
+    head_state: HeadState,
+    query_bank: QueryBank,
+    *,
+    mass_cos_threshold: float = 0.95,
+    value_cos_threshold: float = 0.75,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return eligibility and component similarities for adjacent pair merges."""
+    queries, weights = query_bank.get_weighted_bank()
+    keys_f = head_state.keys.float()
+    values_f = head_state.values.float()
+    queries_f = queries.float()
+    weights_f = weights.float()
+    n = keys_f.shape[0]
+    if n <= 1:
+        empty = torch.empty(0, dtype=torch.float32, device=keys_f.device)
+        return torch.zeros(0, dtype=torch.bool, device=keys_f.device), empty, empty
+
+    weighted_design, _weighted_target = _build_mass_frame(queries_f, keys_f, weights_f)
+    left_cols = weighted_design[:, :-1]
+    right_cols = weighted_design[:, 1:]
+    left_norm = left_cols.norm(dim=0).clamp_min(1e-12)
+    right_norm = right_cols.norm(dim=0).clamp_min(1e-12)
+    mass_cos = (left_cols * right_cols).sum(dim=0) / (left_norm * right_norm)
+
+    normalized_values = torch.nn.functional.normalize(values_f, dim=1)
+    value_cos = (normalized_values[:-1] * normalized_values[1:]).sum(dim=1)
+
+    eligible = (mass_cos >= mass_cos_threshold) & (value_cos >= value_cos_threshold)
+    return eligible, mass_cos, value_cos
 
 
 def _select_keys_with_omp(
@@ -570,6 +571,230 @@ def _select_keys_with_omp(
     if scale is None:
         return [], []
     return selected_indices, [float(value) for value in scale.tolist()]
+
+
+def _hybrid_support_over_candidate_pool(
+    *,
+    target_keys: torch.Tensor,
+    query_tensor: torch.Tensor,
+    entry_weights: torch.Tensor,
+    candidate_keys: torch.Tensor,
+    candidate_values: torch.Tensor,
+    candidate_starts: torch.Tensor,
+    candidate_ends: torch.Tensor,
+    budget: int,
+    config: HybridSelectorConfig,
+    fallback_rep: CompactRepresentation,
+) -> CompactRepresentation:
+    weighted_design, weighted_target = _build_candidate_mass_frame(
+        query_tensor=query_tensor,
+        target_key_tensor=target_keys.float(),
+        candidate_key_tensor=candidate_keys,
+        entry_weights=entry_weights,
+    )
+    alpha, beta = hybrid_evidence_weights(
+        query_tensor,
+        entry_weights,
+        use_evidence_weights=config.use_evidence_weights,
+        fixed_alpha=config.fixed_alpha,
+        fixed_beta=config.fixed_beta,
+    )
+
+    n_tokens = int(target_keys.shape[0])
+    selected_indices: list[int] = []
+    selected_mask = torch.zeros(candidate_keys.shape[0], dtype=torch.bool, device=candidate_keys.device)
+    occupied = torch.zeros(n_tokens, dtype=torch.bool, device=candidate_keys.device)
+    current_prediction = torch.zeros_like(weighted_target)
+    current_span_frac = 0.0
+    current_min = None
+    current_max = None
+
+    column_norm_sq = weighted_design.pow(2).sum(dim=0).clamp_min(1e-12)
+    normalized_candidate_keys = torch.nn.functional.normalize(candidate_keys, dim=1)
+
+    for _ in range(budget):
+        residual = weighted_target - current_prediction
+        residual_energy = residual.pow(2).sum().clamp_min(1e-12)
+        corr = torch.matmul(weighted_design.T, residual)
+        delta_b = corr.clamp_min(0.0).pow(2) / (column_norm_sq * residual_energy)
+
+        if selected_indices:
+            selected_design = weighted_design[:, selected_indices]
+            q_basis = torch.linalg.qr(selected_design, mode="reduced").Q
+            projected = q_basis.T @ weighted_design
+            projected_norm_sq = projected.pow(2).sum(dim=0)
+            orth_norm_sq = (column_norm_sq - projected_norm_sq).clamp_min(0.0)
+            delta_q_coh = orth_norm_sq / column_norm_sq
+        else:
+            delta_q_coh = torch.ones_like(delta_b)
+
+        if config.use_delta_q_low_sv_risk and selected_indices:
+            left_singular, _s, _vh = torch.linalg.svd(selected_design, full_matrices=False)
+            coeff = left_singular.T @ weighted_design
+            projected_energy = coeff.pow(2).sum(dim=0)
+            cutoff = max(1, coeff.shape[0] // 4)
+            low_energy = coeff[-cutoff:].pow(2).sum(dim=0)
+            delta_q_low_sv_risk = torch.where(
+                projected_energy > 1e-12,
+                low_energy / projected_energy.clamp_min(1e-12),
+                torch.zeros_like(projected_energy),
+            )
+        else:
+            delta_q_low_sv_risk = torch.zeros_like(delta_b)
+
+        if config.use_delta_q_redundancy and selected_indices:
+            selected_key_basis = normalized_candidate_keys[selected_indices]
+            key_similarity = normalized_candidate_keys @ selected_key_basis.T
+            delta_q_redundancy = key_similarity.clamp_min(0.0).max(dim=1).values
+        else:
+            delta_q_redundancy = torch.zeros_like(delta_b)
+
+        if current_min is None or current_max is None:
+            new_span_frac = (candidate_ends - candidate_starts + 1).float() / max(n_tokens, 1)
+        else:
+            new_min = torch.minimum(candidate_starts, torch.full_like(candidate_starts, current_min))
+            new_max = torch.maximum(candidate_ends, torch.full_like(candidate_ends, current_max))
+            new_span_frac = (new_max - new_min + 1).float() / max(n_tokens, 1)
+        delta_q_span = (new_span_frac - current_span_frac).clamp_min(0.0)
+
+        occupied_prefix = torch.cat(
+            [
+                torch.zeros(1, device=occupied.device, dtype=torch.long),
+                occupied.to(dtype=torch.long).cumsum(dim=0),
+            ]
+        )
+        overlap = (occupied_prefix[candidate_ends + 1] - occupied_prefix[candidate_starts]) > 0
+
+        score = torch.zeros_like(delta_b)
+        if config.use_delta_b:
+            score = score + delta_b
+        if config.use_delta_q_coh:
+            score = score + alpha * delta_q_coh
+        if config.use_delta_q_span:
+            score = score - beta * delta_q_span
+        if config.use_delta_q_low_sv_risk:
+            score = score - beta * delta_q_low_sv_risk
+        if config.use_delta_q_redundancy:
+            score = score - beta * delta_q_redundancy
+        score[selected_mask | overlap] = -float("inf")
+
+        index = int(torch.argmax(score).item())
+        if not math.isfinite(float(score[index].item())):
+            break
+
+        selected_indices.append(index)
+        selected_mask[index] = True
+        start = int(candidate_starts[index].item())
+        end = int(candidate_ends[index].item())
+        occupied[start : end + 1] = True
+        current_min = start if current_min is None else min(current_min, start)
+        current_max = end if current_max is None else max(current_max, end)
+        current_span_frac = float(((current_max - current_min + 1) / max(n_tokens, 1)))
+
+        selected_design = weighted_design[:, selected_indices]
+        scale = torch.linalg.lstsq(
+            selected_design,
+            weighted_target.unsqueeze(1),
+            driver="gels",
+        ).solution.squeeze(1)
+        scale = scale.clamp_min(1e-12)
+        current_prediction = selected_design @ scale
+
+    if not selected_indices:
+        return fallback_rep
+
+    device = target_keys.device
+    dtype = target_keys.dtype
+    index_tensor = torch.tensor(selected_indices, device=device, dtype=torch.long)
+    support_keys = candidate_keys[index_tensor].to(dtype=dtype, device=device)
+    support_values = candidate_values[index_tensor].to(dtype=candidate_values.dtype, device=candidate_values.device)
+    selected_design = weighted_design[:, selected_indices]
+    betas = torch.linalg.lstsq(
+        selected_design,
+        weighted_target.unsqueeze(1),
+        driver="gels",
+    ).solution.squeeze(1).clamp_min(1e-12).to(dtype=dtype, device=device)
+    return CompactRepresentation(
+        support_keys=support_keys,
+        support_values=support_values,
+        betas=betas,
+    )
+
+
+def _fit_adjacent_pair_representative(
+    *,
+    query_tensor: torch.Tensor,
+    entry_weights: torch.Tensor,
+    left_key: torch.Tensor,
+    right_key: torch.Tensor,
+    left_value: torch.Tensor,
+    right_value: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Fit a conservative local representative for one adjacent pair.
+
+    The construction only searches over a tiny discrete family:
+    - key candidates: left key, right key, arithmetic mean
+    - value candidates: left value, right value, arithmetic mean
+
+    For each key candidate, it fits a single nonnegative beta against the
+    pair's local mass target. It then chooses the value candidate with the
+    lowest local numerator error under that beta. This keeps the merge
+    construction source-grounded and intentionally low-capacity.
+    """
+    inv_sqrt_d = 1.0 / math.sqrt(max(int(query_tensor.shape[1]), 1))
+    left_logits = query_tensor @ left_key.unsqueeze(1) * inv_sqrt_d
+    right_logits = query_tensor @ right_key.unsqueeze(1) * inv_sqrt_d
+    pair_logits = torch.cat([left_logits, right_logits], dim=1)
+    reference_max = pair_logits.max(dim=1, keepdim=True).values
+    left_scores = torch.exp(left_logits - reference_max).squeeze(1)
+    right_scores = torch.exp(right_logits - reference_max).squeeze(1)
+    pair_target_z = left_scores + right_scores
+    pair_target_n = (
+        left_scores.unsqueeze(1) * left_value.unsqueeze(0)
+        + right_scores.unsqueeze(1) * right_value.unsqueeze(0)
+    )
+    row_weights = torch.sqrt(torch.clamp_min(entry_weights.to(dtype=torch.float32), 0.0))
+    weighted_target_z = pair_target_z * row_weights
+    weighted_target_n = pair_target_n * row_weights.unsqueeze(1)
+    dv = max(int(left_value.shape[0]), 1)
+
+    key_candidates = [
+        left_key,
+        right_key,
+        0.5 * (left_key + right_key),
+    ]
+    value_candidates = [
+        left_value,
+        right_value,
+        0.5 * (left_value + right_value),
+    ]
+
+    best_loss = float("inf")
+    best_key = key_candidates[0]
+    best_value = value_candidates[0]
+    for key_candidate in key_candidates:
+        candidate_logits = (query_tensor @ key_candidate.unsqueeze(1) * inv_sqrt_d).squeeze(1)
+        candidate_scores = torch.exp(candidate_logits - reference_max.squeeze(1))
+        weighted_column = candidate_scores * row_weights
+        beta_hat = float(
+            torch.dot(weighted_column, weighted_target_z).item()
+            / max(torch.dot(weighted_column, weighted_column).item(), 1e-12)
+        )
+        beta_hat = max(beta_hat, 1e-12)
+        z_residual = beta_hat * weighted_column - weighted_target_z
+        z_loss = float(torch.dot(z_residual, z_residual).item())
+
+        for value_candidate in value_candidates:
+            pred_n = beta_hat * candidate_scores.unsqueeze(1) * value_candidate.unsqueeze(0)
+            weighted_pred_n = pred_n * row_weights.unsqueeze(1)
+            n_loss = float((weighted_pred_n - weighted_target_n).pow(2).sum().item()) / dv
+            total_loss = z_loss + n_loss
+            if total_loss < best_loss:
+                best_loss = total_loss
+                best_key = key_candidate
+                best_value = value_candidate
+
+    return best_key, best_value
 
 
 def _build_mass_frame(
