@@ -204,6 +204,17 @@ also failed broadly:
   3B move should be a larger framing shift rather than another small local
   construction tweak
 
+The centroid/operator-role assignment precursor in
+[phase3b_centroid_region_precursor.md](/home/csmith/projects/kv_operator_matching/docs/phase3b_centroid_region_precursor.md)
+also failed:
+
+- centroid-conditioned assignment does improve internal assignment coherence
+- and it slightly reduces low-singular update share
+- but it still lowers stable-rank-like geometry and loses after `vfit` in all
+  three regimes
+- so simple centroid-conditioned regional construction is not yet the missing
+  bridge either
+
 Deliverable: a hybrid support strategy that outperforms the best fixed selector on the relevant evidence surfaces, plus at least one merged or synthetic support method that inherits that tradeoff instead of hard-coding a single regime.
 
 ---
