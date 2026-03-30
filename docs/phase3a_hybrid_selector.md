@@ -37,6 +37,8 @@ Constraints respected in this first version:
   [phase3a_ablation_forensics_q256_t32.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase3/phase3a_ablation_forensics_q256_t32.json)
 - Low-singular-risk replacement check:
   [phase3a_ablation_forensics_lowsv_q256_t32.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase3/phase3a_ablation_forensics_lowsv_q256_t32.json)
+- Redundancy-term tranche:
+  [phase3a_prime_redundancy_q256_t32.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase3/phase3a_prime_redundancy_q256_t32.json)
 - Reduced stress slice:
   [phase3a_hybrid_stress_q384_t48_l2028.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase3/phase3a_hybrid_stress_q384_t48_l2028.json)
 
@@ -123,6 +125,23 @@ Against the `ΔB + ΔQ_coh` core, that was worse by:
 - `teacher-forced`: `+1.99`
 - `repeat-prefill`: `+2.77`
 
+The next precommitted Phase 3A-prime tranche also failed cleanly. Adding a
+key-space redundancy penalty to the live `ΔB + ΔQ_coh` core was worse on the
+broad surface in every regime:
+
+- `online`: `8.53` vs core `4.04`
+- `teacher-forced`: `6.64` vs core `4.41`
+- `repeat-prefill`: `10.04` vs core `9.29`
+
+Against the live core, that was worse by:
+
+- `online`: `+4.49`
+- `teacher-forced`: `+2.23`
+- `repeat-prefill`: `+0.75`
+
+That failed the tranche precommit directly, so the redundancy family is
+demoted rather than “rescued” by narrower follow-ups.
+
 The geometry pass also sharpens the mechanism story. Hybrid does **not** keep
 recency-like support geometry:
 
@@ -158,4 +177,5 @@ sharper:
 > evidence state, robustly outperforms recency, and can outperform OMP on
 > sparse online surfaces; in the current formulation, the live core is
 > `ΔB + ΔQ_coh`, while the span penalty, evidence-dependent weighting, and
-> direct low-singular-risk replacement do not yet clearly contribute.
+> direct low-singular-risk and redundancy replacements do not yet clearly
+> contribute.

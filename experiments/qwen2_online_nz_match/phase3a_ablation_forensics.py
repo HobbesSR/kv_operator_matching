@@ -76,6 +76,7 @@ class GeometryRow:
     support_span_frac: float
     support_adjacent_fraction: float
     mean_support_age_frac: float
+    key_redundancy: float
     low_sv_delta_share: float
 
 
@@ -90,6 +91,12 @@ VARIANT_CONFIGS = {
         use_delta_b=True,
         use_delta_q_coh=True,
         use_delta_q_span=False,
+    ),
+    "hybrid_db_coh_redundancy": HybridSelectorConfig(
+        use_delta_b=True,
+        use_delta_q_coh=True,
+        use_delta_q_span=False,
+        use_delta_q_redundancy=True,
     ),
     "hybrid_db_coh_lowsv": HybridSelectorConfig(
         use_delta_b=True,
@@ -200,10 +207,18 @@ def support_geometry(full_keys: torch.Tensor, support_keys: torch.Tensor) -> dic
     else:
         adjacent_fraction = 1.0
         span = 1
+    normed = torch.nn.functional.normalize(support_keys.float(), dim=1)
+    if normed.shape[0] > 1:
+        sims = normed @ normed.T
+        sims.fill_diagonal_(0.0)
+        key_redundancy = float(sims.clamp_min(0.0).max(dim=1).values.mean().item())
+    else:
+        key_redundancy = 0.0
     return {
         "mean_age_frac": float((ages.mean() / max(n_tokens - 1, 1)).item()),
         "span_frac": float(span / max(n_tokens, 1)),
         "adjacent_fraction": adjacent_fraction,
+        "key_redundancy": key_redundancy,
     }
 
 
@@ -288,6 +303,7 @@ def summarize_geometry(rows: List[GeometryRow]) -> dict:
             "mean_support_span_frac": sum(r.support_span_frac for r in group) / len(group),
             "mean_support_adjacent_fraction": sum(r.support_adjacent_fraction for r in group) / len(group),
             "mean_support_age_frac": sum(r.mean_support_age_frac for r in group) / len(group),
+            "mean_key_redundancy": sum(r.key_redundancy for r in group) / len(group),
             "mean_low_sv_delta_share": sum(r.low_sv_delta_share for r in group) / len(group),
         }
     return summary
@@ -303,10 +319,12 @@ def summarize_pairwise(rows: List[AblationRow], methods: List[str]) -> dict:
         ("hybrid", "omp"),
         ("hybrid", "hybrid_db_only"),
         ("hybrid", "hybrid_db_coh"),
+        ("hybrid", "hybrid_db_coh_redundancy"),
         ("hybrid", "hybrid_db_coh_lowsv"),
         ("hybrid", "hybrid_db_span"),
         ("hybrid", "hybrid_unweighted"),
         ("hybrid", "hybrid_frozen_online"),
+        ("hybrid_db_coh_redundancy", "hybrid_db_coh"),
         ("hybrid_db_coh_lowsv", "hybrid_db_coh"),
     ]
     for left, right in pairs:
@@ -348,6 +366,7 @@ def main():
         "hybrid",
         "hybrid_db_only",
         "hybrid_db_coh",
+        "hybrid_db_coh_redundancy",
         "hybrid_db_coh_lowsv",
         "hybrid_db_span",
         "hybrid_unweighted",
@@ -474,6 +493,7 @@ def main():
                                     support_span_frac=g_stats["span_frac"],
                                     support_adjacent_fraction=g_stats["adjacent_fraction"],
                                     mean_support_age_frac=g_stats["mean_age_frac"],
+                                    key_redundancy=g_stats["key_redundancy"],
                                     low_sv_delta_share=low_singular_delta_share(design, delta_values),
                                 )
                             )

@@ -33,6 +33,7 @@ class HybridSelectorConfig:
     use_delta_q_coh: bool = True
     use_delta_q_span: bool = False
     use_delta_q_low_sv_risk: bool = False
+    use_delta_q_redundancy: bool = False
     use_evidence_weights: bool = True
     fixed_alpha: float | None = None
     fixed_beta: float | None = None
@@ -236,6 +237,7 @@ def hybrid_support_baseline(
 
     column_norm_sq = weighted_design.pow(2).sum(dim=0).clamp_min(1e-12)
     all_indices = torch.arange(n, device=keys_f.device)
+    normalized_keys = torch.nn.functional.normalize(keys_f, dim=1)
 
     for _ in range(m):
         residual = weighted_target - current_prediction
@@ -267,6 +269,13 @@ def hybrid_support_baseline(
         else:
             delta_q_low_sv_risk = torch.zeros_like(delta_b)
 
+        if config.use_delta_q_redundancy and selected_indices:
+            selected_key_basis = normalized_keys[selected_indices]
+            key_similarity = normalized_keys @ selected_key_basis.T
+            delta_q_redundancy = key_similarity.clamp_min(0.0).max(dim=1).values
+        else:
+            delta_q_redundancy = torch.zeros_like(delta_b)
+
         if current_min is None or current_max is None:
             new_span_frac = torch.full_like(delta_b, 1.0 / max(n, 1))
         else:
@@ -284,6 +293,8 @@ def hybrid_support_baseline(
             score = score - beta * delta_q_span
         if config.use_delta_q_low_sv_risk:
             score = score - beta * delta_q_low_sv_risk
+        if config.use_delta_q_redundancy:
+            score = score - beta * delta_q_redundancy
         score[selected_mask] = -float("inf")
         index = int(torch.argmax(score).item())
         if not math.isfinite(float(score[index].item())):
