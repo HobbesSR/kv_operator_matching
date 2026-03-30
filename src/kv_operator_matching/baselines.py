@@ -493,6 +493,72 @@ def hybrid_fitted_pairmerge_support_baseline(
     )
 
 
+def hybrid_anchor_region_support_baseline(
+    head_state: HeadState,
+    query_bank: QueryBank,
+    budget: int,
+    config: HybridSelectorConfig | None = None,
+    *,
+    assignment_window: int = 8,
+    assignment_distance_penalty: float = 0.15,
+    assignment_score_floor: float = 0.0,
+    max_neighbor_blend: float = 0.5,
+) -> CompactRepresentation:
+    """Construct one conservative regional representative around each hybrid anchor.
+
+    This keeps the Phase 3A selector fixed. It first selects the live original-
+    token hybrid support, then replaces each selected anchor with a softly
+    blended regional representative built from nearby assigned tokens.
+
+    The intent is to test anchor-conditioned local construction, not a richer
+    selector. Assignment remains local and low-capacity by design.
+    """
+    if config is None:
+        config = HybridSelectorConfig()
+
+    base_rep = hybrid_support_baseline(head_state, query_bank, budget, config)
+    if base_rep.support_keys.numel() == 0:
+        return base_rep
+
+    queries, weights = query_bank.get_weighted_bank()
+    keys = head_state.keys
+    values = head_state.values
+    queries_f = queries.float()
+    keys_f = keys.float()
+    values_f = values.float()
+    weights_f = weights.float()
+
+    weighted_design, weighted_target = _build_mass_frame(queries_f, keys_f, weights_f)
+    anchor_indices = _match_support_to_source_indices(keys_f, base_rep.support_keys.float())
+    region = _build_anchor_region_atoms(
+        keys_f=keys_f,
+        values_f=values_f,
+        weighted_design=weighted_design,
+        anchor_indices=anchor_indices,
+        assignment_window=assignment_window,
+        assignment_distance_penalty=assignment_distance_penalty,
+        assignment_score_floor=assignment_score_floor,
+        max_neighbor_blend=max_neighbor_blend,
+    )
+
+    candidate_design, candidate_target = _build_candidate_mass_frame(
+        query_tensor=queries_f,
+        target_key_tensor=keys_f,
+        candidate_key_tensor=region["support_keys"],
+        entry_weights=weights_f,
+    )
+    betas = torch.linalg.lstsq(
+        candidate_design,
+        candidate_target.unsqueeze(1),
+        driver="gels",
+    ).solution.squeeze(1).clamp_min(1e-12)
+    return CompactRepresentation(
+        support_keys=region["support_keys"].to(dtype=keys.dtype, device=keys.device),
+        support_values=region["support_values"].to(dtype=values.dtype, device=values.device),
+        betas=betas.to(dtype=keys.dtype, device=keys.device),
+    )
+
+
 def compute_adjacent_pair_compatibility(
     head_state: HeadState,
     query_bank: QueryBank,
@@ -523,6 +589,139 @@ def compute_adjacent_pair_compatibility(
 
     eligible = (mass_cos >= mass_cos_threshold) & (value_cos >= value_cos_threshold)
     return eligible, mass_cos, value_cos
+
+
+def _match_support_to_source_indices(
+    source_keys: torch.Tensor,
+    support_keys: torch.Tensor,
+    *,
+    atol: float = 1e-6,
+) -> list[int]:
+    """Map support keys drawn from the source cache back to source indices."""
+    if support_keys.numel() == 0:
+        return []
+
+    remaining = torch.ones(source_keys.shape[0], dtype=torch.bool, device=source_keys.device)
+    matched: list[int] = []
+    for support_key in support_keys:
+        diff = (source_keys - support_key.unsqueeze(0)).abs().amax(dim=1)
+        if remaining.any():
+            masked = diff.masked_fill(~remaining, float("inf"))
+            index = int(torch.argmin(masked).item())
+            if math.isfinite(float(masked[index].item())):
+                matched.append(index)
+                remaining[index] = False
+                continue
+        index = int(torch.argmin(diff).item())
+        matched.append(index)
+        remaining[index] = False
+    return matched
+
+
+def _build_anchor_region_atoms(
+    *,
+    keys_f: torch.Tensor,
+    values_f: torch.Tensor,
+    weighted_design: torch.Tensor,
+    anchor_indices: list[int],
+    assignment_window: int,
+    assignment_distance_penalty: float,
+    assignment_score_floor: float,
+    max_neighbor_blend: float,
+) -> dict[str, torch.Tensor]:
+    """Construct one soft local representative around each selected anchor."""
+    if not anchor_indices:
+        return {
+            "support_keys": keys_f[:0],
+            "support_values": values_f[:0],
+            "assignments": torch.empty(0, dtype=torch.long, device=keys_f.device),
+            "assignment_scores": torch.empty(0, dtype=torch.float32, device=keys_f.device),
+            "region_sizes": torch.empty(0, dtype=torch.long, device=keys_f.device),
+        }
+
+    device = keys_f.device
+    dtype = keys_f.dtype
+    anchor_index_t = torch.tensor(anchor_indices, dtype=torch.long, device=device)
+    anchor_cols = weighted_design[:, anchor_index_t]
+    column_norm = weighted_design.norm(dim=0).clamp_min(1e-12)
+    anchor_norm = anchor_cols.norm(dim=0).clamp_min(1e-12)
+    role_cos = (weighted_design.T @ anchor_cols) / (column_norm.unsqueeze(1) * anchor_norm.unsqueeze(0))
+
+    token_indices = torch.arange(keys_f.shape[0], device=device, dtype=torch.long)
+    distances = (token_indices.unsqueeze(1) - anchor_index_t.unsqueeze(0)).abs()
+    if assignment_window <= 0:
+        local_mask = distances == 0
+        distance_penalty = torch.zeros_like(role_cos)
+    else:
+        local_mask = distances <= assignment_window
+        denom = max(assignment_window - 1, 1)
+        distance_penalty = assignment_distance_penalty * (
+            distances.clamp_min(1).float() - 1.0
+        ) / denom
+
+    score = role_cos - distance_penalty
+    score = score.masked_fill(~local_mask, -float("inf"))
+    for anchor_pos, anchor_idx in enumerate(anchor_indices):
+        score[anchor_idx, anchor_pos] = float("inf")
+
+    best_score, best_anchor_pos = torch.max(score, dim=1)
+    assigned_mask = best_score > assignment_score_floor
+    assigned_mask[anchor_index_t] = True
+    assignments = torch.full((keys_f.shape[0],), -1, dtype=torch.long, device=device)
+    assignments[assigned_mask] = best_anchor_pos[assigned_mask]
+
+    support_keys = []
+    support_values = []
+    region_sizes = []
+    assignment_scores = torch.zeros(keys_f.shape[0], dtype=torch.float32, device=device)
+    assignment_scores[assigned_mask] = torch.where(
+        torch.isfinite(best_score[assigned_mask]),
+        best_score[assigned_mask].to(dtype=torch.float32),
+        torch.ones_like(best_score[assigned_mask], dtype=torch.float32),
+    )
+
+    for anchor_pos, anchor_idx in enumerate(anchor_indices):
+        member_mask = assignments == anchor_pos
+        members = torch.nonzero(member_mask, as_tuple=False).squeeze(1)
+        if members.numel() == 0:
+            members = torch.tensor([anchor_idx], dtype=torch.long, device=device)
+        region_sizes.append(int(members.numel()))
+
+        member_scores = assignment_scores[members].clamp_min(0.0)
+        anchor_member = members == anchor_idx
+        if anchor_member.any():
+            member_scores[anchor_member] = 1.0
+        else:
+            members = torch.cat(
+                [torch.tensor([anchor_idx], dtype=torch.long, device=device), members], dim=0
+            )
+            member_scores = torch.cat(
+                [torch.ones(1, dtype=torch.float32, device=device), member_scores], dim=0
+            )
+
+        weight_sum = member_scores.sum().clamp_min(1e-12)
+        mean_key = (member_scores.unsqueeze(1) * keys_f[members]).sum(dim=0) / weight_sum
+        mean_value = (member_scores.unsqueeze(1) * values_f[members]).sum(dim=0) / weight_sum
+
+        neighbor_weight = member_scores[(members != anchor_idx)].sum()
+        blend = float(
+            min(
+                max_neighbor_blend,
+                float((neighbor_weight / (1.0 + neighbor_weight)).item()) if neighbor_weight.numel() > 0 else 0.0,
+            )
+        )
+        anchor_key = keys_f[anchor_idx]
+        anchor_value = values_f[anchor_idx]
+        support_keys.append(((1.0 - blend) * anchor_key + blend * mean_key).unsqueeze(0))
+        support_values.append(((1.0 - blend) * anchor_value + blend * mean_value).unsqueeze(0))
+
+    return {
+        "support_keys": torch.cat(support_keys, dim=0).to(dtype=dtype, device=device),
+        "support_values": torch.cat(support_values, dim=0).to(dtype=values_f.dtype, device=values_f.device),
+        "assignments": assignments,
+        "assignment_scores": assignment_scores,
+        "region_sizes": torch.tensor(region_sizes, dtype=torch.long, device=device),
+    }
 
 
 def _select_keys_with_omp(

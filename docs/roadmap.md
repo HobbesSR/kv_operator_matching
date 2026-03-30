@@ -191,6 +191,19 @@ also failed cleanly:
 - so the cheap local-pair scoring path now looks exhausted enough that the next
   3B move should change the framing, not just retune the same score
 
+The next framing shift in
+[phase3b_anchor_region.md](/home/csmith/projects/kv_operator_matching/docs/phase3b_anchor_region.md)
+also failed broadly:
+
+- anchor-conditioned local construction around the good hybrid anchors is a
+  heavy, real substrate shift rather than a no-op
+- it can modestly improve baseline support under `repeat-prefill`
+- but it loses after `vfit` in all three regimes, so it does not preserve the
+  original-token hybrid's repairability advantage
+- so simple local constructed-atom families now look weak enough that the next
+  3B move should be a larger framing shift rather than another small local
+  construction tweak
+
 Deliverable: a hybrid support strategy that outperforms the best fixed selector on the relevant evidence surfaces, plus at least one merged or synthetic support method that inherits that tradeoff instead of hard-coding a single regime.
 
 ---
