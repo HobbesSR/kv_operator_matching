@@ -35,6 +35,8 @@ Constraints respected in this first version:
   [phase3a_hybrid_support_profile_q256_t32.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase3/phase3a_hybrid_support_profile_q256_t32.json)
 - Broad ablations and geometry:
   [phase3a_ablation_forensics_q256_t32.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase3/phase3a_ablation_forensics_q256_t32.json)
+- Low-singular-risk replacement check:
+  [phase3a_ablation_forensics_lowsv_q256_t32.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase3/phase3a_ablation_forensics_lowsv_q256_t32.json)
 - Reduced stress slice:
   [phase3a_hybrid_stress_q384_t48_l2028.json](/home/csmith/projects/kv_operator_matching/results/checkpoints/phase3/phase3a_hybrid_stress_q384_t48_l2028.json)
 
@@ -102,6 +104,25 @@ surface:
 - `teacher-forced`: `-0.22`
 - `repeat-prefill`: `+0.14`
 
+This is strong enough to promote `ΔB + ΔQ_coh` as the live Phase 3A selector
+core.
+
+The next direct replacement test also failed cleanly: replacing raw span with a
+low-singular-direction risk penalty made the selector much worse than both the
+core and the old full score.
+
+Broad `q256/t32` mean holdout `L_true` for the low-singular-risk variant:
+
+- `online`: `6.61`
+- `teacher-forced`: `6.40`
+- `repeat-prefill`: `12.06`
+
+Against the `ΔB + ΔQ_coh` core, that was worse by:
+
+- `online`: `+2.57`
+- `teacher-forced`: `+1.99`
+- `repeat-prefill`: `+2.77`
+
 The geometry pass also sharpens the mechanism story. Hybrid does **not** keep
 recency-like support geometry:
 
@@ -135,5 +156,6 @@ sharper:
 > A continuous support objective driven primarily by baseline-fidelity gain
 > plus coherence novelty yields a hybrid support family that adapts with
 > evidence state, robustly outperforms recency, and can outperform OMP on
-> sparse online surfaces; in the current formulation, the span penalty and
-> evidence-dependent weighting do not yet clearly contribute.
+> sparse online surfaces; in the current formulation, the live core is
+> `ΔB + ΔQ_coh`, while the span penalty, evidence-dependent weighting, and
+> direct low-singular-risk replacement do not yet clearly contribute.

@@ -119,9 +119,12 @@ Tasks:
   evidence-dependent weighting) to identify which ingredients are decisive.
 - [x] Phase 3A: compare hybrid support geometry and post-vfit weak-direction
   drift directly against recency and OMP on the winning surfaces.
-- [ ] Phase 3A-prime: simplify the live selector around the current payload
-  (`ΔB + ΔQ_coh`) and test a more targeted repair-risk proxy in place of raw
-  span.
+- [x] Phase 3A-prime: simplify the live selector around the current payload
+  (`ΔB + ΔQ_coh`).
+- [x] Phase 3A-prime: test one targeted repair-risk proxy in place of raw
+  span, and record the failure of the direct low-singular-risk replacement.
+- [ ] Phase 3A-prime: test a different risk term family (for example age
+  dispersion or redundancy) rather than another weak-direction proxy.
 - [ ] Phase 3B: implement K-means-style support proposal: cluster key vectors, use cluster centroids as support keys, fit values and betas jointly
 - [ ] Phase 3B: implement exponential-family merge: given two KV pairs, compute a merged point that matches the first two moments of their contribution to Z and N
 - [ ] Empirical tests of response sparsity (Open Question 1 from theory sketch)
@@ -134,11 +137,11 @@ Current note: the first Phase 3A selector and its supporting artifacts live in
 The corrected Phase 3A result is:
 
 - the first continuous hybrid selector really does adapt with evidence state
-- its useful payload is currently `ΔB + ΔQ_coh`
+- its live core is currently `ΔB + ΔQ_coh`
 - it robustly beats recency
 - it can beat OMP on sparse online surfaces
-- but raw span and evidence-dependent weighting do not yet clearly earn their
-  place
+- but raw span, evidence-dependent weighting, and the direct low-singular-risk
+  replacement do not yet clearly earn their place
 
 Deliverable: a hybrid support strategy that outperforms the best fixed selector on the relevant evidence surfaces, plus at least one merged or synthetic support method that inherits that tradeoff instead of hard-coding a single regime.
 

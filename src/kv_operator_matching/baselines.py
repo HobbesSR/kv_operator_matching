@@ -31,7 +31,8 @@ class HybridSelectorConfig:
 
     use_delta_b: bool = True
     use_delta_q_coh: bool = True
-    use_delta_q_span: bool = True
+    use_delta_q_span: bool = False
+    use_delta_q_low_sv_risk: bool = False
     use_evidence_weights: bool = True
     fixed_alpha: float | None = None
     fixed_beta: float | None = None
@@ -187,14 +188,13 @@ def hybrid_support_baseline(
 ) -> CompactRepresentation:
     """Continuous hybrid selector over original-token candidates only.
 
-    The first Phase 3A selector uses a greedy additive score:
+    The live Phase 3A selector uses a greedy additive score centered on the
+    current core terms:
 
-        J_add = Delta B + alpha(E) * Delta Q_coh - beta(E) * Delta Q_span
+        J_add = Delta B + alpha(E) * Delta Q_coh
 
-    where:
-      - Delta B is incremental baseline-fidelity gain on the stable mass frame
-      - Delta Q_coh is a stable-rank-like novelty term
-      - Delta Q_span is the increase in normalized temporal support span
+    Optional penalties such as span or other risk proxies are still exposed
+    through HybridSelectorConfig for ablation and future follow-up work.
 
     `alpha(E)` and `beta(E)` are continuous functions of evidence-state
     observables derived from the current query bank.
@@ -253,6 +253,20 @@ def hybrid_support_baseline(
         else:
             delta_q_coh = torch.ones_like(delta_b)
 
+        if config.use_delta_q_low_sv_risk and selected_indices:
+            left_singular, _s, _vh = torch.linalg.svd(selected_design, full_matrices=False)
+            coeff = left_singular.T @ weighted_design
+            projected_energy = coeff.pow(2).sum(dim=0)
+            cutoff = max(1, coeff.shape[0] // 4)
+            low_energy = coeff[-cutoff:].pow(2).sum(dim=0)
+            delta_q_low_sv_risk = torch.where(
+                projected_energy > 1e-12,
+                low_energy / projected_energy.clamp_min(1e-12),
+                torch.zeros_like(projected_energy),
+            )
+        else:
+            delta_q_low_sv_risk = torch.zeros_like(delta_b)
+
         if current_min is None or current_max is None:
             new_span_frac = torch.full_like(delta_b, 1.0 / max(n, 1))
         else:
@@ -268,6 +282,8 @@ def hybrid_support_baseline(
             score = score + alpha * delta_q_coh
         if config.use_delta_q_span:
             score = score - beta * delta_q_span
+        if config.use_delta_q_low_sv_risk:
+            score = score - beta * delta_q_low_sv_risk
         score[selected_mask] = -float("inf")
         index = int(torch.argmax(score).item())
         if not math.isfinite(float(score[index].item())):

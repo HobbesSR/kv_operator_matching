@@ -91,6 +91,12 @@ VARIANT_CONFIGS = {
         use_delta_q_coh=True,
         use_delta_q_span=False,
     ),
+    "hybrid_db_coh_lowsv": HybridSelectorConfig(
+        use_delta_b=True,
+        use_delta_q_coh=True,
+        use_delta_q_span=False,
+        use_delta_q_low_sv_risk=True,
+    ),
     "hybrid_db_span": HybridSelectorConfig(
         use_delta_b=True,
         use_delta_q_coh=False,
@@ -292,7 +298,17 @@ def summarize_pairwise(rows: List[AblationRow], methods: List[str]) -> dict:
     for row in rows:
         by[(row.prompt_id, row.collection_mode, row.layer, row.kv_head, row.budget, row.method)] = row.vfit_l_true
     out = {}
-    pairs = [("hybrid", "recency"), ("hybrid", "omp"), ("hybrid", "hybrid_db_only"), ("hybrid", "hybrid_db_coh"), ("hybrid", "hybrid_db_span"), ("hybrid", "hybrid_unweighted"), ("hybrid", "hybrid_frozen_online")]
+    pairs = [
+        ("hybrid", "recency"),
+        ("hybrid", "omp"),
+        ("hybrid", "hybrid_db_only"),
+        ("hybrid", "hybrid_db_coh"),
+        ("hybrid", "hybrid_db_coh_lowsv"),
+        ("hybrid", "hybrid_db_span"),
+        ("hybrid", "hybrid_unweighted"),
+        ("hybrid", "hybrid_frozen_online"),
+        ("hybrid_db_coh_lowsv", "hybrid_db_coh"),
+    ]
     for left, right in pairs:
         diffs_by_mode = defaultdict(list)
         for key, value in by.items():
@@ -332,6 +348,7 @@ def main():
         "hybrid",
         "hybrid_db_only",
         "hybrid_db_coh",
+        "hybrid_db_coh_lowsv",
         "hybrid_db_span",
         "hybrid_unweighted",
         "hybrid_frozen_online",
