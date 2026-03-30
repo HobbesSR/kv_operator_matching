@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from run_experiment import (
     _compute_query_states_from_hidden_states,
     _extract_kv_states_from_cache,
+    _forward_with_captured_layer_inputs,
     _forward_with_cache_position,
     extract_teacher_forced_continuation_ids,
     load_model,
@@ -120,18 +121,18 @@ def _teacher_forced_query_states(
     logical_position = prompt_len
     for token_id in continuation_token_ids:
         token_tensor = torch.tensor([[int(token_id)]], device=device, dtype=torch.long)
-        outputs = _forward_with_cache_position(
+        outputs, layer_inputs = _forward_with_captured_layer_inputs(
             model,
             token_tensor,
             past_key_values,
             logical_position,
-            output_hidden_states=True,
+            layers,
             output_attentions=False,
         )
         past_key_values = outputs.past_key_values
         qstates = _compute_query_states_from_hidden_states(
             model,
-            outputs.hidden_states,
+            layer_inputs,
             torch.tensor([[logical_position]], device=device, dtype=torch.long),
             layers,
         )
@@ -156,12 +157,12 @@ def _batched_continuation_query_states(
     prompt_len: int,
 ):
     cont_tensor = torch.tensor([continuation_token_ids], device=device, dtype=torch.long)
-    outputs = _forward_with_cache_position(
+    outputs, layer_inputs = _forward_with_captured_layer_inputs(
         model,
         cont_tensor,
         past_key_values,
         prompt_len,
-        output_hidden_states=True,
+        layers,
         output_attentions=False,
     )
     position_ids = torch.arange(
@@ -172,7 +173,7 @@ def _batched_continuation_query_states(
     ).unsqueeze(0)
     qstates = _compute_query_states_from_hidden_states(
         model,
-        outputs.hidden_states,
+        layer_inputs,
         position_ids,
         layers,
     )

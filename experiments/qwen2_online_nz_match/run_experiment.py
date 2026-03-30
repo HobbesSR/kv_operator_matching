@@ -221,6 +221,46 @@ def _compute_query_states_from_hidden_states(
     return query_states
 
 
+def _forward_with_captured_layer_inputs(
+    model,
+    input_ids: torch.Tensor,
+    past_key_values,
+    start_position: int,
+    layers_of_interest: List[int],
+    *,
+    output_attentions: bool = False,
+):
+    """
+    Run a cache-aware forward pass while capturing only the requested decoder-layer
+    inputs instead of requesting all model hidden states.
+    """
+    captured_inputs: Dict[int, torch.Tensor] = {}
+    hooks = []
+
+    def make_pre_hook(layer_idx: int):
+        def pre_hook(_module, inputs):
+            captured_inputs[layer_idx] = inputs[0].detach()
+        return pre_hook
+
+    for layer_idx in sorted(set(layers_of_interest)):
+        hooks.append(model.model.layers[layer_idx].register_forward_pre_hook(make_pre_hook(layer_idx)))
+
+    try:
+        outputs = _forward_with_cache_position(
+            model,
+            input_ids,
+            past_key_values,
+            start_position,
+            output_hidden_states=False,
+            output_attentions=output_attentions,
+        )
+    finally:
+        for hook in hooks:
+            hook.remove()
+
+    return outputs, captured_inputs
+
+
 def extract_kv_states_from_prompt(
     model,
     tokenizer,
@@ -253,16 +293,52 @@ def extract_query_states_from_prompt(
     seq_len = inputs["input_ids"].shape[1]
     print(f"  Query prompt: {seq_len} tokens", flush=True)
 
-    with torch.no_grad():
-        outputs = model(**inputs, use_cache=True, output_hidden_states=True)
+    _outputs, layer_inputs = _forward_with_captured_layer_inputs(
+        model,
+        inputs["input_ids"],
+        None,
+        0,
+        layers_of_interest,
+        output_attentions=False,
+    )
 
     query_states = _compute_query_states_from_hidden_states(
         model,
-        outputs.hidden_states,
+        layer_inputs,
         torch.arange(seq_len, device=device).unsqueeze(0),
         layers_of_interest,
     )
     return query_states
+
+
+def extract_kv_and_query_states_from_prompt(
+    model,
+    tokenizer,
+    prompt: str,
+    device: str,
+    layers_of_interest: List[int],
+) -> Tuple[Dict, Dict]:
+    """Run one prefill pass and return both KV states and post-RoPE query states."""
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    seq_len = inputs["input_ids"].shape[1]
+    print(f"  Prompt: {seq_len} tokens", flush=True)
+
+    outputs, layer_inputs = _forward_with_captured_layer_inputs(
+        model,
+        inputs["input_ids"],
+        None,
+        0,
+        layers_of_interest,
+        output_attentions=False,
+    )
+    kv_states = _extract_kv_states_from_cache(outputs.past_key_values, layers_of_interest)
+    query_states = _compute_query_states_from_hidden_states(
+        model,
+        layer_inputs,
+        torch.arange(seq_len, device=device).unsqueeze(0),
+        layers_of_interest,
+    )
+    return kv_states, query_states
 
 
 def _join_turn_text(turns: List[dict]) -> str:
@@ -459,19 +535,19 @@ def collect_online_kv_and_query_banks(
         if eos_token_id is not None and next_token == eos_token_id:
             break
         token_tensor = torch.tensor([[next_token]], device=device, dtype=torch.long)
-        outputs = _forward_with_cache_position(
+        outputs, layer_inputs = _forward_with_captured_layer_inputs(
             model,
             token_tensor,
             past_key_values,
             logical_position,
-            output_hidden_states=True,
+            layers_of_interest,
             output_attentions=False,
         )
         past_key_values = outputs.past_key_values
         logits = outputs.logits[:, -1, :]
         query_states = _compute_query_states_from_hidden_states(
             model,
-            outputs.hidden_states,
+            layer_inputs,
             torch.tensor([[logical_position]], device=device, dtype=torch.long),
             layers_of_interest,
         )
@@ -539,18 +615,18 @@ def collect_teacher_forced_kv_and_query_banks(
     logical_position = prompt_len
     for token_id in continuation_token_ids[:max_continuation_tokens]:
         token_tensor = torch.tensor([[int(token_id)]], device=device, dtype=torch.long)
-        outputs = _forward_with_cache_position(
+        outputs, layer_inputs = _forward_with_captured_layer_inputs(
             model,
             token_tensor,
             past_key_values,
             logical_position,
-            output_hidden_states=True,
+            layers_of_interest,
             output_attentions=False,
         )
         past_key_values = outputs.past_key_values
         query_states = _compute_query_states_from_hidden_states(
             model,
-            outputs.hidden_states,
+            layer_inputs,
             torch.tensor([[logical_position]], device=device, dtype=torch.long),
             layers_of_interest,
         )
@@ -748,6 +824,7 @@ def run_methods(
     beta_cfg: BetaFitConfig,
     seed: int,
     mode: str,
+    compute_diagnostics: bool = True,
 ) -> Tuple[List[MethodResult], List[RefitDiagnostic]]:
     """Run all methods for one (layer, kv_head, budget) combination."""
     results = []
@@ -780,6 +857,8 @@ def run_methods(
         pre_rep: CompactRepresentation,
         post_rep: CompactRepresentation,
     ):
+        if not compute_diagnostics:
+            return
         _pre_train_lz, _pre_train_ln, pre_train_lt, pre_train_llin = compute_metrics(pre_rep, head_state, train_qbank)
         _post_train_lz, _post_train_ln, post_train_lt, post_train_llin = compute_metrics(post_rep, head_state, train_qbank)
         _pre_holdout_lz, _pre_holdout_ln, pre_holdout_lt, pre_holdout_llin = compute_metrics(pre_rep, head_state, holdout_qbank)
@@ -1048,15 +1127,21 @@ def main():
     query_banks: Dict[Tuple[int, int], QueryBank]
     observed_positions: int
     if args.collection_mode in {"prefill", "repeat-prefill"}:
-        kv_states = extract_kv_states_from_prompt(
-            model, tokenizer, prompt, args.device, args.layers
-        )
-        query_prompt = (
-            prompt if args.collection_mode == "prefill" else build_repeat_prefill_prompt(prompt)
-        )
-        query_states = extract_query_states_from_prompt(
-            model, tokenizer, query_prompt, args.device, args.layers
-        )
+        if args.collection_mode == "prefill":
+            kv_states, query_states = extract_kv_and_query_states_from_prompt(
+                model, tokenizer, prompt, args.device, args.layers
+            )
+        else:
+            kv_states = extract_kv_states_from_prompt(
+                model, tokenizer, prompt, args.device, args.layers
+            )
+            query_states = extract_query_states_from_prompt(
+                model,
+                tokenizer,
+                build_repeat_prefill_prompt(prompt),
+                args.device,
+                args.layers,
+            )
         query_banks = {}
         for layer_idx in args.layers:
             for kv_head in range(n_kv_heads):

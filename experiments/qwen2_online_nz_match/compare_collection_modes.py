@@ -438,6 +438,7 @@ def main():
                             beta_cfg,
                             args.seed,
                             "full",
+                            compute_diagnostics=False,
                         )
                         for row in results:
                             payload = asdict(row)
