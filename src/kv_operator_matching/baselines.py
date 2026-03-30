@@ -16,12 +16,25 @@ TODO (for each baseline): wire up beta-refit in the experiment pipeline
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import torch
 
 from .objectives import compute_logits
 from .query_bank import QueryBank
 from .types import CompactRepresentation, HeadState
+
+
+@dataclass(frozen=True)
+class HybridSelectorConfig:
+    """Configuration for the Phase 3A hybrid support selector."""
+
+    use_delta_b: bool = True
+    use_delta_q_coh: bool = True
+    use_delta_q_span: bool = True
+    use_evidence_weights: bool = True
+    fixed_alpha: float | None = None
+    fixed_beta: float | None = None
 
 
 def recency_baseline(head_state: HeadState, budget: int) -> CompactRepresentation:
@@ -170,6 +183,7 @@ def hybrid_support_baseline(
     head_state: HeadState,
     query_bank: QueryBank,
     budget: int,
+    config: HybridSelectorConfig | None = None,
 ) -> CompactRepresentation:
     """Continuous hybrid selector over original-token candidates only.
 
@@ -185,6 +199,9 @@ def hybrid_support_baseline(
     `alpha(E)` and `beta(E)` are continuous functions of evidence-state
     observables derived from the current query bank.
     """
+    if config is None:
+        config = HybridSelectorConfig()
+
     queries, weights = query_bank.get_weighted_bank()
     keys = head_state.keys
     values = head_state.values
@@ -202,7 +219,13 @@ def hybrid_support_baseline(
     weights_f = weights.float()
 
     weighted_design, weighted_target = _build_mass_frame(queries_f, keys_f, weights_f)
-    alpha, beta = _hybrid_evidence_weights(queries_f, weights_f)
+    alpha, beta = hybrid_evidence_weights(
+        queries_f,
+        weights_f,
+        use_evidence_weights=config.use_evidence_weights,
+        fixed_alpha=config.fixed_alpha,
+        fixed_beta=config.fixed_beta,
+    )
 
     selected_indices: list[int] = []
     selected_mask = torch.zeros(n, dtype=torch.bool, device=keys_f.device)
@@ -238,7 +261,13 @@ def hybrid_support_baseline(
             new_span_frac = (new_max - new_min + 1).float() / max(n, 1)
         delta_q_span = (new_span_frac - current_span_frac).clamp_min(0.0)
 
-        score = delta_b + alpha * delta_q_coh - beta * delta_q_span
+        score = torch.zeros_like(delta_b)
+        if config.use_delta_b:
+            score = score + delta_b
+        if config.use_delta_q_coh:
+            score = score + alpha * delta_q_coh
+        if config.use_delta_q_span:
+            score = score - beta * delta_q_span
         score[selected_mask] = -float("inf")
         index = int(torch.argmax(score).item())
         if not math.isfinite(float(score[index].item())):
@@ -342,11 +371,22 @@ def _build_mass_frame(
     return weighted_design, weighted_target
 
 
-def _hybrid_evidence_weights(
+def hybrid_evidence_weights(
     query_tensor: torch.Tensor,
     entry_weights: torch.Tensor,
+    *,
+    use_evidence_weights: bool = True,
+    fixed_alpha: float | None = None,
+    fixed_beta: float | None = None,
 ) -> tuple[float, float]:
     """Map continuous query-bank observables to coherence/span weights."""
+    if fixed_alpha is not None or fixed_beta is not None:
+        alpha = 0.0 if fixed_alpha is None else float(fixed_alpha)
+        beta = 0.0 if fixed_beta is None else float(fixed_beta)
+        return alpha, beta
+    if not use_evidence_weights:
+        return 1.0, 1.0
+
     weighted_queries = query_tensor * entry_weights.sqrt().unsqueeze(-1)
     sv = torch.linalg.svdvals(weighted_queries)
     smax = float(sv.max().item()) if sv.numel() > 0 else 0.0

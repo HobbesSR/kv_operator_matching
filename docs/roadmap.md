@@ -115,10 +115,13 @@ Tasks:
   first selector.
 - [x] Phase 3A: evaluate whether the continuous selector moves between
   recency-like and OMP-like behavior as evidence-state changes.
-- [ ] Phase 3A: ablate the hybrid score terms (`ΔB`, `ΔQ_coh`, `ΔQ_span`,
+- [x] Phase 3A: ablate the hybrid score terms (`ΔB`, `ΔQ_coh`, `ΔQ_span`,
   evidence-dependent weighting) to identify which ingredients are decisive.
-- [ ] Phase 3A: compare hybrid support geometry and post-vfit weak-direction
+- [x] Phase 3A: compare hybrid support geometry and post-vfit weak-direction
   drift directly against recency and OMP on the winning surfaces.
+- [ ] Phase 3A-prime: simplify the live selector around the current payload
+  (`ΔB + ΔQ_coh`) and test a more targeted repair-risk proxy in place of raw
+  span.
 - [ ] Phase 3B: implement K-means-style support proposal: cluster key vectors, use cluster centroids as support keys, fit values and betas jointly
 - [ ] Phase 3B: implement exponential-family merge: given two KV pairs, compute a merged point that matches the first two moments of their contribution to Z and N
 - [ ] Empirical tests of response sparsity (Open Question 1 from theory sketch)
@@ -128,9 +131,14 @@ Tasks:
 
 Current note: the first Phase 3A selector and its supporting artifacts live in
 [phase3a_hybrid_selector.md](/home/csmith/projects/kv_operator_matching/docs/phase3a_hybrid_selector.md).
-The current result is stronger than the minimum success criterion: the first
-continuous hybrid selector not only moves smoothly with evidence state, it
-already beats both `recency+vfit` and `omp+vfit` on the tested surfaces.
+The corrected Phase 3A result is:
+
+- the first continuous hybrid selector really does adapt with evidence state
+- its useful payload is currently `ΔB + ΔQ_coh`
+- it robustly beats recency
+- it can beat OMP on sparse online surfaces
+- but raw span and evidence-dependent weighting do not yet clearly earn their
+  place
 
 Deliverable: a hybrid support strategy that outperforms the best fixed selector on the relevant evidence surfaces, plus at least one merged or synthetic support method that inherits that tradeoff instead of hard-coding a single regime.
 
