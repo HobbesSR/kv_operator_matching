@@ -211,6 +211,7 @@ def summarize_deltas(rows: List[dict]) -> List[dict]:
         "attn_mass+vfit": "attn_mass",
         "attn_mass+phase1b": "attn_mass",
         "omp+vfit": "omp",
+        "hybrid+vfit": "hybrid",
     }
 
     by_cell = {}
@@ -272,6 +273,7 @@ def summarize_paired_delta_differences(rows: List[dict]) -> List[dict]:
         "attn_mass+vfit": "attn_mass",
         "attn_mass+phase1b": "attn_mass",
         "omp+vfit": "omp",
+        "hybrid+vfit": "hybrid",
     }
 
     holdout_rows = [row for row in rows if row["split"] == "holdout"]

@@ -24,7 +24,7 @@ Deliverable: a repo where the objectives are implemented, the query bank runs, a
 
 ---
 
-## Phase 2 (Current): Evidence-Regime and Support-Tradeoff Mapping
+## Phase 2 (Mapped): Evidence-Regime and Support-Tradeoff Mapping
 
 **Goal**: Map how support quality, repairability, and evidence regime interact on Qwen 2 under the N/Z framing.
 
@@ -62,7 +62,7 @@ Phase 2 deliverable is therefore not a single final selector. It is a mapped tra
 
 ---
 
-## Phase 3: Hybrid Support Objective and Constructed Support
+## Phase 3 (Current): Hybrid Support Objective and Constructed Support
 
 **Goal**: Build a single support-selection strategy whose behavior changes continuously with the observed evidence state, then extend it to merged or synthetic support.
 
@@ -95,32 +95,42 @@ That means Phase 3 naturally splits into:
 - frontier policy: maintain local split/collapse preferences from online stats
 
 Tasks:
-- [ ] Phase 3A handoff checkpoint: keep the first target narrow and explicit.
+- [x] Phase 3A handoff checkpoint: keep the first target narrow and explicit.
   The first selector should use only original-token candidates and answer one
   question: can one continuous hybrid selector interpolate between recency-like
   and OMP-like behavior as evidence-state changes, without hand-switching
   regimes?
-- [ ] Phase 3A: implement a first hybrid selector with score
+- [x] Phase 3A: implement a first hybrid selector with score
   `J_add = ΔB + alpha(E) * ΔQ_coh - beta(E) * ΔQ_span`
   where:
   - `ΔB` is baseline-fidelity gain
   - `ΔQ_coh` is a repairability / coherence proxy with stable-rank improvement
     as the main term
   - `ΔQ_span` is a spread penalty, starting with temporal/support span
-- [ ] Phase 3A constraint: keep this as a single selector, not a hidden
+- [x] Phase 3A constraint: keep this as a single selector, not a hidden
   regime switch.
-- [ ] Phase 3A constraint: `alpha(E)` and `beta(E)` must be functions of
+- [x] Phase 3A constraint: `alpha(E)` and `beta(E)` must be functions of
   continuous observables already available in the harness.
-- [ ] Phase 3A constraint: do not introduce merged or synthetic atoms in the
+- [x] Phase 3A constraint: do not introduce merged or synthetic atoms in the
   first selector.
-- [ ] Phase 3A: evaluate whether the continuous selector moves between
+- [x] Phase 3A: evaluate whether the continuous selector moves between
   recency-like and OMP-like behavior as evidence-state changes.
+- [ ] Phase 3A: ablate the hybrid score terms (`ΔB`, `ΔQ_coh`, `ΔQ_span`,
+  evidence-dependent weighting) to identify which ingredients are decisive.
+- [ ] Phase 3A: compare hybrid support geometry and post-vfit weak-direction
+  drift directly against recency and OMP on the winning surfaces.
 - [ ] Phase 3B: implement K-means-style support proposal: cluster key vectors, use cluster centroids as support keys, fit values and betas jointly
 - [ ] Phase 3B: implement exponential-family merge: given two KV pairs, compute a merged point that matches the first two moments of their contribution to Z and N
 - [ ] Empirical tests of response sparsity (Open Question 1 from theory sketch)
 - [ ] Empirical tests of spectral decay in the query-key kernel matrix (Open Question 2)
 - [ ] Positional encoding interaction study: does RoPE structure in key vectors affect support quality? (Open Question 5)
 - [ ] More principled merge proposal logic: conditions under which a good merge exists (toward Open Question 6)
+
+Current note: the first Phase 3A selector and its supporting artifacts live in
+[phase3a_hybrid_selector.md](/home/csmith/projects/kv_operator_matching/docs/phase3a_hybrid_selector.md).
+The current result is stronger than the minimum success criterion: the first
+continuous hybrid selector not only moves smoothly with evidence state, it
+already beats both `recency+vfit` and `omp+vfit` on the tested surfaces.
 
 Deliverable: a hybrid support strategy that outperforms the best fixed selector on the relevant evidence surfaces, plus at least one merged or synthetic support method that inherits that tradeoff instead of hard-coding a single regime.
 

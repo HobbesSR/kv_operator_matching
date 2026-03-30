@@ -21,6 +21,8 @@ Methods compared:
   attn_mass+phase1b - attn_mass support, safe sequential mass beta-fit then value refit
   omp             - OMP-selected support with fitted beta coefficients
   omp+vfit        - OMP support+beta with anchored value-only refit
+  hybrid          - continuous hybrid support selector over original tokens
+  hybrid+vfit     - hybrid support with anchored value-only refit
   uniform         - random selection, betas=1 (sanity check)
 
 Metrics reported per (layer, kv_head, budget):
@@ -55,6 +57,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from kv_operator_matching.baselines import (
     attention_mass_baseline,
+    hybrid_support_baseline,
     omp_mass_baseline,
     recency_baseline,
     uniform_baseline,
@@ -847,6 +850,15 @@ def run_methods(
     rec("omp+vfit", rep_v, t0)
     add_refit_diag("omp+vfit", rep, rep_v)
 
+    t0 = time.time()
+    rep = hybrid_support_baseline(head_state, train_qbank, budget)
+    rec("hybrid", rep, t0)
+
+    t0 = time.time()
+    rep_v = refit_values(rep, head_state.keys, head_state.values, train_qbank, beta_cfg)
+    rec("hybrid+vfit", rep_v, t0)
+    add_refit_diag("hybrid+vfit", rep, rep_v)
+
     if mode == "full":
         t0 = time.time()
         rep = uniform_baseline(head_state, budget)
@@ -870,6 +882,8 @@ FULL_METHODS = [
     "attn_mass+phase1b",
     "omp",
     "omp+vfit",
+    "hybrid",
+    "hybrid+vfit",
     "uniform",
 ]
 FOCUSED_METHODS = [
@@ -879,6 +893,8 @@ FOCUSED_METHODS = [
     "attn_mass+phase1b",
     "omp",
     "omp+vfit",
+    "hybrid",
+    "hybrid+vfit",
 ]
 MW = max(len(m) for m in FULL_METHODS) + 2
 

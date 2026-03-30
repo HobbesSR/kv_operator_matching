@@ -166,6 +166,118 @@ def omp_mass_baseline(
     )
 
 
+def hybrid_support_baseline(
+    head_state: HeadState,
+    query_bank: QueryBank,
+    budget: int,
+) -> CompactRepresentation:
+    """Continuous hybrid selector over original-token candidates only.
+
+    The first Phase 3A selector uses a greedy additive score:
+
+        J_add = Delta B + alpha(E) * Delta Q_coh - beta(E) * Delta Q_span
+
+    where:
+      - Delta B is incremental baseline-fidelity gain on the stable mass frame
+      - Delta Q_coh is a stable-rank-like novelty term
+      - Delta Q_span is the increase in normalized temporal support span
+
+    `alpha(E)` and `beta(E)` are continuous functions of evidence-state
+    observables derived from the current query bank.
+    """
+    queries, weights = query_bank.get_weighted_bank()
+    keys = head_state.keys
+    values = head_state.values
+    n = keys.shape[0]
+    m = min(budget, n)
+    if m <= 0:
+        return CompactRepresentation(
+            support_keys=keys[:0],
+            support_values=values[:0],
+            betas=torch.ones(0, dtype=keys.dtype, device=keys.device),
+        )
+
+    queries_f = queries.float()
+    keys_f = keys.float()
+    weights_f = weights.float()
+
+    weighted_design, weighted_target = _build_mass_frame(queries_f, keys_f, weights_f)
+    alpha, beta = _hybrid_evidence_weights(queries_f, weights_f)
+
+    selected_indices: list[int] = []
+    selected_mask = torch.zeros(n, dtype=torch.bool, device=keys_f.device)
+    current_prediction = torch.zeros_like(weighted_target)
+    current_span_frac = 0.0
+    current_min = None
+    current_max = None
+
+    column_norm_sq = weighted_design.pow(2).sum(dim=0).clamp_min(1e-12)
+    all_indices = torch.arange(n, device=keys_f.device)
+
+    for _ in range(m):
+        residual = weighted_target - current_prediction
+        residual_energy = residual.pow(2).sum().clamp_min(1e-12)
+        corr = torch.matmul(weighted_design.T, residual)
+        delta_b = corr.clamp_min(0.0).pow(2) / (column_norm_sq * residual_energy)
+
+        if selected_indices:
+            selected_design = weighted_design[:, selected_indices]
+            q_basis = torch.linalg.qr(selected_design, mode="reduced").Q
+            projected = q_basis.T @ weighted_design
+            projected_norm_sq = projected.pow(2).sum(dim=0)
+            orth_norm_sq = (column_norm_sq - projected_norm_sq).clamp_min(0.0)
+            delta_q_coh = orth_norm_sq / column_norm_sq
+        else:
+            delta_q_coh = torch.ones_like(delta_b)
+
+        if current_min is None or current_max is None:
+            new_span_frac = torch.full_like(delta_b, 1.0 / max(n, 1))
+        else:
+            new_min = torch.minimum(all_indices, torch.full_like(all_indices, current_min))
+            new_max = torch.maximum(all_indices, torch.full_like(all_indices, current_max))
+            new_span_frac = (new_max - new_min + 1).float() / max(n, 1)
+        delta_q_span = (new_span_frac - current_span_frac).clamp_min(0.0)
+
+        score = delta_b + alpha * delta_q_coh - beta * delta_q_span
+        score[selected_mask] = -float("inf")
+        index = int(torch.argmax(score).item())
+        if not math.isfinite(float(score[index].item())):
+            break
+
+        selected_indices.append(index)
+        selected_mask[index] = True
+        current_min = index if current_min is None else min(current_min, index)
+        current_max = index if current_max is None else max(current_max, index)
+        current_span_frac = float(((current_max - current_min + 1) / max(n, 1)))
+
+        selected_design = weighted_design[:, selected_indices]
+        scale = torch.linalg.lstsq(
+            selected_design,
+            weighted_target.unsqueeze(1),
+            driver="gels",
+        ).solution.squeeze(1)
+        scale = scale.clamp_min(1e-12)
+        current_prediction = selected_design @ scale
+
+    if not selected_indices:
+        return recency_baseline(head_state, budget)
+
+    index_tensor = torch.tensor(selected_indices, device=keys.device, dtype=torch.long)
+    support_keys = keys[index_tensor]
+    support_values = values[index_tensor]
+    selected_design = weighted_design[:, selected_indices]
+    betas = torch.linalg.lstsq(
+        selected_design,
+        weighted_target.unsqueeze(1),
+        driver="gels",
+    ).solution.squeeze(1).clamp_min(1e-12).to(dtype=keys.dtype, device=keys.device)
+    return CompactRepresentation(
+        support_keys=support_keys,
+        support_values=support_values,
+        betas=betas,
+    )
+
+
 def _select_keys_with_omp(
     *,
     key_tensor: torch.Tensor,
@@ -212,6 +324,44 @@ def _select_keys_with_omp(
     if scale is None:
         return [], []
     return selected_indices, [float(value) for value in scale.tolist()]
+
+
+def _build_mass_frame(
+    query_tensor: torch.Tensor,
+    key_tensor: torch.Tensor,
+    entry_weights: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    inv_sqrt_d = 1.0 / math.sqrt(max(int(query_tensor.shape[1]), 1))
+    logits = (query_tensor @ key_tensor.T) * inv_sqrt_d
+    reference_max = logits.max(dim=1, keepdim=True).values
+    exp_scores = torch.exp(logits - reference_max)
+    target = exp_scores.sum(dim=1)
+    row_weights = torch.sqrt(torch.clamp_min(entry_weights.to(dtype=torch.float32), 0.0))
+    weighted_design = exp_scores * row_weights.unsqueeze(1)
+    weighted_target = target * row_weights
+    return weighted_design, weighted_target
+
+
+def _hybrid_evidence_weights(
+    query_tensor: torch.Tensor,
+    entry_weights: torch.Tensor,
+) -> tuple[float, float]:
+    """Map continuous query-bank observables to coherence/span weights."""
+    weighted_queries = query_tensor * entry_weights.sqrt().unsqueeze(-1)
+    sv = torch.linalg.svdvals(weighted_queries)
+    smax = float(sv.max().item()) if sv.numel() > 0 else 0.0
+    srank = float((weighted_queries.square().sum() / max(smax * smax, 1e-12)).item())
+    srank_norm = min(
+        srank / max(1.0, float(min(weighted_queries.shape[0], weighted_queries.shape[1]))),
+        1.0,
+    )
+    weight_sum = float(entry_weights.sum().item())
+    ess = (weight_sum * weight_sum) / max(float(entry_weights.square().sum().item()), 1e-12)
+    ess_norm = min(ess / max(float(query_tensor.shape[0]), 1.0), 1.0)
+    richness = 0.5 * (srank_norm + ess_norm)
+    alpha = 0.2 + 0.8 * (1.0 - richness)
+    beta = 0.2 + 0.8 * (1.0 - richness)
+    return alpha, beta
 
 
 def uniform_baseline(head_state: HeadState, budget: int) -> CompactRepresentation:
