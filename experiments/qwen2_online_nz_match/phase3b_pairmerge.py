@@ -32,6 +32,7 @@ from kv_operator_matching.baselines import (
     hybrid_support_baseline,
 )
 from kv_operator_matching.config import BetaFitConfig
+from kv_operator_matching.objectives import compute_quotient_residual_diagnostics
 from kv_operator_matching.types import HeadState
 from kv_operator_matching.value_fit import refit_values
 
@@ -63,6 +64,9 @@ class Phase3BRow:
     l_true: float
     l_lin: float
     merged_fraction: float
+    qr_per_dim: float
+    qr_cancellation_gain: float
+    qr_worst_ratio: float
 
 
 def parse_args():
@@ -74,7 +78,7 @@ def parse_args():
     p.add_argument(
         "--collection-modes",
         nargs="+",
-        default=["online", "teacher-forced", "repeat-prefill"],
+        default=["online", "teacher-forced-suffix", "repeat-prefill"],
     )
     p.add_argument(
         "--prompt-files",
@@ -122,6 +126,7 @@ def _record_rows(
     merged_fraction = _merged_atom_fraction(rep, head_state)
     for split_name, bank in (("train", train_qbank), ("holdout", holdout_qbank)):
         lz, ln, lt, llin = compute_metrics(rep, head_state, bank)
+        qr = quotient_stats(rep, head_state, bank)
         rows.append(
             Phase3BRow(
                 prompt_id=prompt_id,
@@ -139,8 +144,35 @@ def _record_rows(
                 l_true=lt,
                 l_lin=llin,
                 merged_fraction=merged_fraction,
+                qr_per_dim=qr["qr_per_dim"],
+                qr_cancellation_gain=qr["qr_cancellation_gain"],
+                qr_worst_ratio=qr["qr_worst_ratio"],
             )
         )
+
+
+def quotient_stats(rep, head_state: HeadState, qbank):
+    queries, weights = qbank.get_weighted_bank()
+    total_w = weights.sum().clamp(min=1e-12)
+    terms = compute_quotient_residual_diagnostics(
+        queries,
+        rep.support_keys,
+        rep.support_values,
+        rep.betas,
+        head_state.keys,
+        head_state.values,
+    )
+    d_v = head_state.values.shape[-1]
+    delta_n_sq = terms["delta_n"].square().sum(dim=-1)
+    o_delta_z_sq = (terms["a_ref"] * terms["delta_z"].unsqueeze(-1)).square().sum(dim=-1)
+    qr_sq = terms["quotient_residual"].square().sum(dim=-1)
+    cancellation_gain = 1.0 - qr_sq / (delta_n_sq + o_delta_z_sq).clamp(min=1e-12)
+    qr_ratio = qr_sq.sqrt() / terms["z_ref"].clamp(min=1e-12)
+    return {
+        "qr_per_dim": float(((weights * qr_sq).sum() / (total_w * d_v)).item()),
+        "qr_cancellation_gain": float(((weights * cancellation_gain).sum() / total_w).item()),
+        "qr_worst_ratio": float(qr_ratio.max().item()),
+    }
 
 
 def summarize(rows: List[dict]) -> dict:
@@ -161,6 +193,14 @@ def summarize(rows: List[dict]) -> dict:
                 "mean_merged_fraction": sum(merged_grouped[(mode, method)]) / len(
                     merged_grouped[(mode, method)]
                 ),
+                "mean_holdout_qr_per_dim": sum(
+                    row["qr_per_dim"] for row in holdout_rows
+                    if row["collection_mode"] == mode and row["method"] == method
+                ) / len(values),
+                "mean_holdout_qr_cancellation_gain": sum(
+                    row["qr_cancellation_gain"] for row in holdout_rows
+                    if row["collection_mode"] == mode and row["method"] == method
+                ) / len(values),
                 "num_cells": len(values),
             }
         )
@@ -183,6 +223,7 @@ def summarize(rows: List[dict]) -> dict:
         ("hybrid_pairmerge+vfit", "hybrid+vfit"),
     ]:
         deltas_by_mode = defaultdict(list)
+        qr_deltas_by_mode = defaultdict(list)
         merged_by_mode = defaultdict(list)
         for key, lhs_row in by_cell.items():
             prompt_id, mode, layer, kv_head, budget, method = key
@@ -193,6 +234,7 @@ def summarize(rows: List[dict]) -> dict:
             if rhs_row is None:
                 continue
             deltas_by_mode[mode].append(lhs_row["l_true"] - rhs_row["l_true"])
+            qr_deltas_by_mode[mode].append(lhs_row["qr_per_dim"] - rhs_row["qr_per_dim"])
             merged_by_mode[mode].append(lhs_row["merged_fraction"])
 
         for mode, values in sorted(deltas_by_mode.items()):
@@ -202,6 +244,7 @@ def summarize(rows: List[dict]) -> dict:
                     "lhs": lhs,
                     "rhs": rhs,
                     "mean_delta_holdout_l_true": sum(values) / len(values),
+                    "mean_delta_holdout_qr_per_dim": sum(qr_deltas_by_mode[mode]) / len(qr_deltas_by_mode[mode]),
                     "improved_cells": sum(value < 0 for value in values),
                     "num_cells": len(values),
                     "mean_lhs_merged_fraction": sum(merged_by_mode[mode]) / len(

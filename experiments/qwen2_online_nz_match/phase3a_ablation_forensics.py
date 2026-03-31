@@ -32,7 +32,13 @@ from kv_operator_matching.baselines import (
     recency_baseline,
 )
 from kv_operator_matching.config import BetaFitConfig
-from kv_operator_matching.objectives import compute_logits, compute_response, compute_z, loss_n
+from kv_operator_matching.objectives import (
+    compute_logits,
+    compute_quotient_residual_diagnostics,
+    compute_response,
+    compute_z,
+    loss_n,
+)
 from kv_operator_matching.query_bank import QueryBank
 from kv_operator_matching.types import CompactRepresentation, HeadState
 from kv_operator_matching.value_fit import refit_values
@@ -57,6 +63,12 @@ class AblationRow:
     baseline_l_true: float
     vfit_l_true: float
     delta_holdout_l_true: float
+    baseline_qr_per_dim: float
+    vfit_qr_per_dim: float
+    baseline_qr_cancellation_gain: float
+    vfit_qr_cancellation_gain: float
+    baseline_qr_worst_ratio: float
+    vfit_qr_worst_ratio: float
 
 
 @dataclass
@@ -78,6 +90,12 @@ class GeometryRow:
     mean_support_age_frac: float
     key_redundancy: float
     low_sv_delta_share: float
+    baseline_qr_per_dim: float
+    vfit_qr_per_dim: float
+    baseline_qr_cancellation_gain: float
+    vfit_qr_cancellation_gain: float
+    baseline_qr_worst_ratio: float
+    vfit_qr_worst_ratio: float
 
 
 VARIANT_CONFIGS = {
@@ -127,7 +145,7 @@ def parse_args():
     p.add_argument(
         "--collection-modes",
         nargs="+",
-        default=["online", "teacher-forced", "repeat-prefill"],
+        default=["online", "teacher-forced-suffix", "repeat-prefill"],
     )
     p.add_argument(
         "--prompt-files",
@@ -158,6 +176,30 @@ def compute_metrics(rep: CompactRepresentation, head_state: HeadState, qbank: Qu
           compute_response(queries, head_state.keys, head_state.values)) ** 2).sum(dim=-1) * weights
     ).sum() / total_w
     return float(l_true.item())
+
+
+def quotient_stats(rep: CompactRepresentation, head_state: HeadState, qbank: QueryBank):
+    queries, weights = qbank.get_weighted_bank()
+    total_w = weights.sum().clamp(min=1e-12)
+    terms = compute_quotient_residual_diagnostics(
+        queries,
+        rep.support_keys,
+        rep.support_values,
+        rep.betas,
+        head_state.keys,
+        head_state.values,
+    )
+    d_v = head_state.values.shape[-1]
+    delta_n_sq = terms["delta_n"].square().sum(dim=-1)
+    o_delta_z_sq = (terms["a_ref"] * terms["delta_z"].unsqueeze(-1)).square().sum(dim=-1)
+    qr_sq = terms["quotient_residual"].square().sum(dim=-1)
+    cancellation_gain = 1.0 - qr_sq / (delta_n_sq + o_delta_z_sq).clamp(min=1e-12)
+    qr_ratio = qr_sq.sqrt() / terms["z_ref"].clamp(min=1e-12)
+    return {
+        "qr_per_dim": float(((weights * qr_sq).sum() / (total_w * d_v)).item()),
+        "qr_cancellation_gain": float(((weights * cancellation_gain).sum() / total_w).item()),
+        "qr_worst_ratio": float(qr_ratio.max().item()),
+    }
 
 
 def build_design(
@@ -283,6 +325,10 @@ def summarize_ablation(rows: List[AblationRow]) -> dict:
             "mean_alpha": sum(r.alpha for r in group) / len(group),
             "mean_beta": sum(r.beta for r in group) / len(group),
             "mean_holdout_l_true": sum(r.vfit_l_true for r in group) / len(group),
+            "mean_baseline_qr_per_dim": sum(r.baseline_qr_per_dim for r in group) / len(group),
+            "mean_vfit_qr_per_dim": sum(r.vfit_qr_per_dim for r in group) / len(group),
+            "mean_vfit_qr_cancellation_gain": sum(r.vfit_qr_cancellation_gain for r in group) / len(group),
+            "mean_vfit_qr_worst_ratio": sum(r.vfit_qr_worst_ratio for r in group) / len(group),
         }
     return summary
 
@@ -305,6 +351,10 @@ def summarize_geometry(rows: List[GeometryRow]) -> dict:
             "mean_support_age_frac": sum(r.mean_support_age_frac for r in group) / len(group),
             "mean_key_redundancy": sum(r.key_redundancy for r in group) / len(group),
             "mean_low_sv_delta_share": sum(r.low_sv_delta_share for r in group) / len(group),
+            "mean_baseline_qr_per_dim": sum(r.baseline_qr_per_dim for r in group) / len(group),
+            "mean_vfit_qr_per_dim": sum(r.vfit_qr_per_dim for r in group) / len(group),
+            "mean_vfit_qr_cancellation_gain": sum(r.vfit_qr_cancellation_gain for r in group) / len(group),
+            "mean_vfit_qr_worst_ratio": sum(r.vfit_qr_worst_ratio for r in group) / len(group),
         }
     return summary
 
@@ -443,8 +493,19 @@ def main():
                             vfit_rep = refit_values(base_rep, keys, values, train_qbank, beta_cfg)
                             base_l_true = compute_metrics(base_rep, head_state, holdout_qbank)
                             vfit_l_true = compute_metrics(vfit_rep, head_state, holdout_qbank)
+                            base_qr = quotient_stats(base_rep, head_state, holdout_qbank)
+                            vfit_qr = quotient_stats(vfit_rep, head_state, holdout_qbank)
                             baseline_method = method
-                            cached[method] = (base_rep, vfit_rep, alpha, beta, base_l_true, vfit_l_true)
+                            cached[method] = (
+                                base_rep,
+                                vfit_rep,
+                                alpha,
+                                beta,
+                                base_l_true,
+                                vfit_l_true,
+                                base_qr,
+                                vfit_qr,
+                            )
                             ablation_rows.append(
                                 AblationRow(
                                     prompt_id=prompt_path.name,
@@ -461,12 +522,27 @@ def main():
                                     baseline_l_true=base_l_true,
                                     vfit_l_true=vfit_l_true,
                                     delta_holdout_l_true=vfit_l_true - base_l_true,
+                                    baseline_qr_per_dim=base_qr["qr_per_dim"],
+                                    vfit_qr_per_dim=vfit_qr["qr_per_dim"],
+                                    baseline_qr_cancellation_gain=base_qr["qr_cancellation_gain"],
+                                    vfit_qr_cancellation_gain=vfit_qr["qr_cancellation_gain"],
+                                    baseline_qr_worst_ratio=base_qr["qr_worst_ratio"],
+                                    vfit_qr_worst_ratio=vfit_qr["qr_worst_ratio"],
                                 )
                             )
 
                         train_queries, train_weights = train_qbank.get_weighted_bank()
                         for method in geometry_methods:
-                            base_rep, vfit_rep, _alpha, _beta, base_l_true, vfit_l_true = cached[method]
+                            (
+                                base_rep,
+                                vfit_rep,
+                                _alpha,
+                                _beta,
+                                base_l_true,
+                                vfit_l_true,
+                                base_qr,
+                                vfit_qr,
+                            ) = cached[method]
                             design = build_design(
                                 train_queries,
                                 train_weights,
@@ -495,6 +571,12 @@ def main():
                                     mean_support_age_frac=g_stats["mean_age_frac"],
                                     key_redundancy=g_stats["key_redundancy"],
                                     low_sv_delta_share=low_singular_delta_share(design, delta_values),
+                                    baseline_qr_per_dim=base_qr["qr_per_dim"],
+                                    vfit_qr_per_dim=vfit_qr["qr_per_dim"],
+                                    baseline_qr_cancellation_gain=base_qr["qr_cancellation_gain"],
+                                    vfit_qr_cancellation_gain=vfit_qr["qr_cancellation_gain"],
+                                    baseline_qr_worst_ratio=base_qr["qr_worst_ratio"],
+                                    vfit_qr_worst_ratio=vfit_qr["qr_worst_ratio"],
                                 )
                             )
 

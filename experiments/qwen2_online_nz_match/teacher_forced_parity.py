@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Parity checks for teacher-forced decode collection.
+Parity checks for suffix teacher-forced decode collection.
 
 This script compares two ways of obtaining continuation-side query states:
 
-1. teacher-forced decode: feed continuation tokens one by one with a live cache
+1. teacher-forced-suffix decode: feed continuation tokens one by one with a live cache
 2. batched continuation prefill: feed the same continuation tokens as a chunk
 
 For a causal transformer, these should agree up to numerical noise when cache

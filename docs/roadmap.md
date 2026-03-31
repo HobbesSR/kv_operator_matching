@@ -76,6 +76,16 @@ where:
 - `C(S; E)` is instability / spread cost
 - `alpha(E), beta(E)` are continuous weights driven by observed evidence properties
 
+Interpretation update:
+
+- baseline support quality should increasingly be read as "how small the
+  initial output-scaled quotient residual already is" on the operational bank
+- repairability should increasingly be read as "how much the allowed
+  approximation class can move the residual toward the local null direction"
+  rather than as geometry in the abstract
+- current geometry proxies remain useful only insofar as they predict that
+  quotient-aware behavior
+
 The evidence state should be represented by continuous proxies rather than hard labels, for example:
 - support-normalized stable rank
 - weak-direction drift risk / low-singular update share
@@ -138,6 +148,10 @@ Tasks:
 - [ ] Empirical tests of spectral decay in the query-key kernel matrix (Open Question 2)
 - [ ] Positional encoding interaction study: does RoPE structure in key vectors affect support quality? (Open Question 5)
 - [ ] More principled merge proposal logic: conditions under which a good merge exists (toward Open Question 6)
+- [ ] Quotient-residual forensic tranche: add explicit residual diagnostics to
+  the Phase 2 / 3 forensic scripts and check whether they explain the known
+  beta-only, `vfit`, hybrid, and merge results better than the current proxy
+  geometry alone
 
 Current note: the first Phase 3A selector and its supporting artifacts live in
 [phase3a_hybrid_selector.md](/home/csmith/projects/kv_operator_matching/docs/phase3a_hybrid_selector.md).

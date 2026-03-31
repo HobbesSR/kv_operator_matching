@@ -5,10 +5,17 @@ Qwen 2.5 N/Z operator matching smoke test.
 Supports four query-bank collection modes:
   prefill        - use prompt-prefill queries as an offline proxy bank
   repeat-prefill - use a separate "prompt / Repeat it. / prompt" prefill bank
-  teacher-forced - prefill the prompt, then feed a fixed continuation token by
-                   token to harvest decode-time queries
+  teacher-forced-suffix - prefill the prompt, then feed a fixed continuation
+                          token by token to harvest decode-time queries
+  teacher-forced-full-prompt - replay the prompt itself token by token from an
+                               empty cache to collect incremental prompt queries
+                               as a control path
   online         - prefill the prompt into the KV cache, then collect decode-step
                    queries during greedy generation into a live query bank
+
+Project policy: when you want dense prompt-side evidence, prefer `prefill`.
+Use `teacher-forced-full-prompt` when you explicitly want a prompt-side replay
+control.
 
 Methods compared:
   recency         - keep last m tokens, betas=1
@@ -639,6 +646,116 @@ def collect_teacher_forced_kv_and_query_banks(
 
     return boundary_kv_states, query_banks, observed_tokens
 
+
+def collect_full_prompt_replay_kv_and_query_banks(
+    model,
+    tokenizer,
+    prompt: str,
+    device: str,
+    layers_of_interest: List[int],
+    bank_config: QueryBankConfig,
+    *,
+    continue_online_after_boundary: bool = False,
+    max_new_tokens: int = 0,
+) -> Tuple[Dict, Dict[Tuple[int, int], QueryBank], int]:
+    """
+    Replay the prompt token by token from an empty cache and collect queries.
+
+    This is the decode-faithful prompt-observation regime: the prompt cache is
+    built incrementally, and prompt-position query states are harvested under
+    the same single-step execution pattern used later in decode.
+
+    If continue_online_after_boundary is True, the routine keeps the
+    prompt-boundary cache fixed as the compacted object, then appends true
+    on-policy decode evidence to the same query bank.
+    """
+    inputs = tokenizer(prompt, return_tensors="pt")
+    input_ids = inputs["input_ids"].to(device)
+    prompt_len = input_ids.shape[1]
+    print(f"  Prompt: {prompt_len} tokens", flush=True)
+
+    n_heads = model.config.num_attention_heads
+    n_kv_heads = model.config.num_key_value_heads
+    per_layer_steps: Dict[int, List[torch.Tensor]] = {layer_idx: [] for layer_idx in layers_of_interest}
+
+    past_key_values = None
+    logical_position = 0
+    outputs = None
+    for token_idx in range(prompt_len):
+        token_tensor = input_ids[:, token_idx : token_idx + 1]
+        outputs, layer_inputs = _forward_with_captured_layer_inputs(
+            model,
+            token_tensor,
+            past_key_values,
+            logical_position,
+            layers_of_interest,
+            output_attentions=False,
+        )
+        past_key_values = outputs.past_key_values
+        query_states = _compute_query_states_from_hidden_states(
+            model,
+            layer_inputs,
+            torch.tensor([[logical_position]], device=device, dtype=torch.long),
+            layers_of_interest,
+        )
+        for layer_idx in layers_of_interest:
+            per_layer_steps[layer_idx].append(query_states[layer_idx][:, 0:1, :])
+        logical_position += 1
+
+    if outputs is None:
+        raise RuntimeError("Prompt replay did not produce any outputs.")
+
+    boundary_kv_states = _extract_kv_states_from_cache(past_key_values, layers_of_interest)
+    observed_tokens = prompt_len
+    prompt_query_states = {
+        layer_idx: torch.cat(per_layer_steps[layer_idx], dim=1)
+        for layer_idx in layers_of_interest
+    }
+    query_banks = {
+        (layer_idx, kv_head_idx): build_query_bank(
+            prompt_query_states[layer_idx],
+            kv_head_idx,
+            n_heads,
+            n_kv_heads,
+            bank_config,
+        )
+        for layer_idx in layers_of_interest
+        for kv_head_idx in range(n_kv_heads)
+    }
+
+    if continue_online_after_boundary and max_new_tokens > 0:
+        generated_tokens = 0
+        eos_token_id = tokenizer.eos_token_id
+        logits = outputs.logits[:, -1, :]
+        next_token = _select_greedy(logits)
+        while generated_tokens < max_new_tokens:
+            if eos_token_id is not None and next_token == eos_token_id:
+                break
+            token_tensor = torch.tensor([[next_token]], device=device, dtype=torch.long)
+            outputs, layer_inputs = _forward_with_captured_layer_inputs(
+                model,
+                token_tensor,
+                past_key_values,
+                logical_position,
+                layers_of_interest,
+                output_attentions=False,
+            )
+            past_key_values = outputs.past_key_values
+            logits = outputs.logits[:, -1, :]
+            query_states = _compute_query_states_from_hidden_states(
+                model,
+                layer_inputs,
+                torch.tensor([[logical_position]], device=device, dtype=torch.long),
+                layers_of_interest,
+            )
+            _add_query_states_to_banks(query_states, query_banks, n_heads, n_kv_heads)
+            generated_tokens += 1
+            observed_tokens += 1
+            logical_position += 1
+            next_token = _select_greedy(logits)
+
+    return boundary_kv_states, query_banks, observed_tokens
+
 def build_query_bank(
     query_states_for_layer: torch.Tensor,  # (n_heads, seq_len, head_dim)
     kv_head_idx: int,
@@ -647,27 +764,39 @@ def build_query_bank(
     config: QueryBankConfig,
 ) -> QueryBank:
     """
-    Build a query bank for one KV head from context-prefill query vectors.
+    Build a query bank for one KV head from collected query vectors.
 
     In GQA, kv_head_idx is shared by (n_heads // n_kv_heads) query heads.
-    We stack all their prefill query vectors into the bank with uniform weights.
+    Queries are materialized in a canonical position-major order so prompt-side
+    prefill and token-by-token replay feed the same evidence stream into the
+    bank. When a uniform bank must be capped, we deterministically downsample
+    that ordered stream instead of letting collection order decide retention.
     """
-    qpk = n_heads // n_kv_heads          # query heads per KV head
+    qpk = n_heads // n_kv_heads
     first = kv_head_idx * qpk
     head_queries = query_states_for_layer[first : first + qpk]  # (qpk, seq, head_dim)
-    all_queries = head_queries.reshape(-1, head_queries.shape[-1])   # (qpk*seq, head_dim)
+    ordered_queries = head_queries.permute(1, 0, 2).reshape(-1, head_queries.shape[-1])
 
-    # Subsample uniformly so the bank represents all query heads and positions
-    # equally. The QueryBank uses FIFO eviction, which would keep only the last
-    # max_queries entries (biased to the last query head) if we add all at once.
-    n_total = all_queries.shape[0]
+    n_total = ordered_queries.shape[0]
     max_q = config.max_queries
-    if max_q > 0 and n_total > max_q:
-        idx = torch.randperm(n_total)[:max_q]
-        all_queries = all_queries[idx]
-
     bank = QueryBank(config)
-    bank.add_queries(all_queries)
+
+    if n_total == 0:
+        return bank
+
+    if config.weighting_scheme == "uniform":
+        retained_queries = ordered_queries
+        if max_q > 0 and n_total > max_q:
+            idx = (
+                (torch.arange(max_q, device=ordered_queries.device, dtype=torch.float32) + 0.5)
+                * (float(n_total) / float(max_q))
+            ).floor().clamp(max=n_total - 1).long()
+            retained_queries = ordered_queries[idx]
+        bank.add_queries(retained_queries)
+        return bank
+
+    for idx in range(n_total):
+        bank.add_queries(ordered_queries[idx : idx + 1])
     return bank
 
 
@@ -1038,7 +1167,18 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model",   default="Qwen/Qwen2.5-3B")
     p.add_argument("--device",  default="cuda" if torch.cuda.is_available() else "cpu")
-    p.add_argument("--collection-mode", choices=["prefill", "repeat-prefill", "teacher-forced", "online"], default="online")
+    p.add_argument(
+        "--collection-mode",
+        choices=[
+            "prefill",
+            "repeat-prefill",
+            "teacher-forced",
+            "teacher-forced-suffix",
+            "teacher-forced-full-prompt",
+            "online",
+        ],
+        default="online",
+    )
     p.add_argument("--query-weighting", choices=["uniform", "recency"], default=None)
     p.add_argument("--prompt-file", default=None)
     p.add_argument("--prefix-turns", type=int, default=8)
@@ -1049,6 +1189,12 @@ def parse_args():
     p.add_argument("--max-queries", type=int, default=512)
     p.add_argument("--max-new-tokens", type=int, default=64)
     p.add_argument("--prefill-chunk-size", type=int, default=64)
+    p.add_argument(
+        "--continue-online-after-prompt-replay",
+        action="store_true",
+        help="When collection-mode=teacher-forced-full-prompt, keep collecting "
+             "true on-policy decode evidence after the prompt boundary.",
+    )
     p.add_argument("--train-fraction", type=float, default=0.5)
     p.add_argument("--good-support-ltrue-threshold", type=float, default=10.0)
     p.add_argument("--good-support-stable-rank-threshold", type=float, default=8.0)
@@ -1086,6 +1232,11 @@ def build_repeat_prefill_prompt(prompt: str) -> str:
 
 def main():
     args = parse_args()
+    requested_mode = args.collection_mode
+    if args.collection_mode == "teacher-forced":
+        print("  Note: collection-mode=teacher-forced is an explicit alias for "
+              "teacher-forced-suffix.", flush=True)
+        args.collection_mode = "teacher-forced-suffix"
     torch.manual_seed(args.seed)
 
     model, tokenizer = load_model(args.model, args.device)
@@ -1106,7 +1257,7 @@ def main():
             prefix_turns=args.prefix_turns,
             continuation_turns=args.continuation_turns,
         )
-    elif args.collection_mode == "teacher-forced":
+    elif args.collection_mode == "teacher-forced-suffix":
         prompt_path = smoke_data_path / "near_capacity_dispatch_safe.json"
         prompt_source = prompt_path.name
         prompt, continuation_text = load_prompt_segments_from_file(
@@ -1114,7 +1265,7 @@ def main():
             prefix_turns=args.prefix_turns,
             continuation_turns=args.continuation_turns,
         )
-        print(f"  Teacher-forced prompt source: {prompt_path.name}", flush=True)
+        print(f"  Teacher-forced-suffix prompt source: {prompt_path.name}", flush=True)
     else:
         prompt = build_prompt()
         continuation_text = ""
@@ -1151,7 +1302,7 @@ def main():
         observed_positions = int(query_states[args.layers[0]].shape[1])
         label = "prefill proxy" if args.collection_mode == "prefill" else "repeat-prefill control"
         print(f"  Collection mode: {label}", flush=True)
-    elif args.collection_mode == "teacher-forced":
+    elif args.collection_mode == "teacher-forced-suffix":
         continuation_token_ids = extract_teacher_forced_continuation_ids(
             tokenizer,
             prompt,
@@ -1170,7 +1321,26 @@ def main():
             max_continuation_tokens=args.max_new_tokens,
         )
         observed_positions = observed_tokens
-        print(f"  Collection mode: teacher-forced decode ({observed_tokens} observed tokens)", flush=True)
+        print(
+            f"  Collection mode: teacher-forced-suffix ({observed_tokens} observed tokens)",
+            flush=True,
+        )
+    elif args.collection_mode == "teacher-forced-full-prompt":
+        kv_states, query_banks, observed_tokens = collect_full_prompt_replay_kv_and_query_banks(
+            model,
+            tokenizer,
+            prompt,
+            args.device,
+            args.layers,
+            bank_cfg,
+            continue_online_after_boundary=args.continue_online_after_prompt_replay,
+            max_new_tokens=args.max_new_tokens,
+        )
+        observed_positions = observed_tokens
+        label = "teacher-forced-full-prompt"
+        if args.continue_online_after_prompt_replay:
+            label += "+online"
+        print(f"  Collection mode: {label} ({observed_tokens} observed tokens)", flush=True)
     else:
         kv_states, query_banks, generated_tokens = collect_online_kv_and_query_banks(
             model,
@@ -1283,6 +1453,7 @@ def main():
             json.dumps(
                 {
                     "args": vars(args),
+                    "requested_collection_mode": requested_mode,
                     "collection_meta": collection_meta,
                     "results": [asdict(r) for r in all_results],
                     "good_support_diagnostics": [asdict(d) for d in all_support_diagnostics],

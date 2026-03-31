@@ -1,8 +1,9 @@
 """
 N/Z operator matching objectives.
 
-Defines the empirical surrogate losses (L_Z, L_N, L_lin) and the
-true response error (L_true) used for verification.
+Defines the empirical surrogate losses (L_Z, L_N, L_lin), the
+true response error (L_true), and quotient-residual diagnostics used
+for forensics.
 
 Math notation (ASCII):
   Z_mu(q)  = sum_i beta_i * exp(<q, k_i>)
@@ -39,6 +40,14 @@ The default normalized form L_Z + L_N/d_v equalizes their contribution.
 True response error:
   L_true = sum_t w_t * ||A_hat(q_t) - A_ref(q_t)||^2
 
+Quotient residual:
+  E(q_t) = (N_hat - N_ref) - A_ref * (Z_hat - Z_ref)
+  delta O(q_t) = E(q_t) / Z_ref(q_t)
+
+For diagnostics, E is computed under a shared per-query logit shift across
+hat and ref so that N and Z live in the same stable scale. Under this shared
+scale, E / Z_ref is exactly the response error vector.
+
 L_true is non-convex in beta in general. It is used for verification
 only, not for fitting.
 """
@@ -48,6 +57,42 @@ from typing import Optional
 
 import torch
 from torch import Tensor
+
+
+def _stable_terms_with_shared_max(
+    queries: Tensor,
+    keys_hat: Tensor,
+    values_hat: Tensor,
+    betas_hat: Optional[Tensor],
+    keys_ref: Tensor,
+    values_ref: Tensor,
+    betas_ref: Optional[Tensor] = None,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Return stable Z/N terms for hat and ref under a shared per-query shift.
+
+    The shared shift makes delta-Z, delta-N, and quotient residual diagnostics
+    directly comparable without overflow.
+    """
+    logits_hat = compute_logits(queries, keys_hat)
+    logits_ref = compute_logits(queries, keys_ref)
+    max_logits = torch.max(
+        logits_hat.max(dim=-1).values,
+        logits_ref.max(dim=-1).values,
+    ).unsqueeze(-1)
+
+    exp_hat = torch.exp(logits_hat - max_logits)
+    exp_ref = torch.exp(logits_ref - max_logits)
+
+    if betas_hat is not None:
+        exp_hat = exp_hat * betas_hat.unsqueeze(0)
+    if betas_ref is not None:
+        exp_ref = exp_ref * betas_ref.unsqueeze(0)
+
+    z_hat = exp_hat.sum(dim=-1).clamp(min=1e-30)
+    z_ref = exp_ref.sum(dim=-1).clamp(min=1e-30)
+    n_hat = exp_hat @ values_hat
+    n_ref = exp_ref @ values_ref
+    return z_hat, n_hat, z_ref, n_ref
 
 
 def compute_logits(
@@ -173,6 +218,136 @@ def compute_response(
     n = exp_logits @ values  # (n_queries, d_v)
     # Scale cancels: A = N / Z = (scale * n_stable) / (scale * z_stable)
     return n / z  # (n_queries, d_v)
+
+
+def compute_quotient_residual(
+    queries: Tensor,
+    keys_hat: Tensor,
+    values_hat: Tensor,
+    betas_hat: Tensor,
+    keys_ref: Tensor,
+    values_ref: Tensor,
+    betas_ref: Optional[Tensor] = None,
+) -> Tensor:
+    """Compute the per-query quotient residual E(q) in stable shared coordinates.
+
+    E(q) = delta N(q) - A_ref(q) * delta Z(q)
+
+    Under the shared per-query scaling used here, E(q) / Z_ref(q) is exactly
+    the response error vector A_hat(q) - A_ref(q).
+    """
+    z_hat, n_hat, z_ref, n_ref = _stable_terms_with_shared_max(
+        queries,
+        keys_hat,
+        values_hat,
+        betas_hat,
+        keys_ref,
+        values_ref,
+        betas_ref,
+    )
+    a_ref = n_ref / z_ref.unsqueeze(-1)
+    delta_z = z_hat - z_ref
+    delta_n = n_hat - n_ref
+    return delta_n - a_ref * delta_z.unsqueeze(-1)
+
+
+def compute_quotient_residual_diagnostics(
+    queries: Tensor,
+    keys_hat: Tensor,
+    values_hat: Tensor,
+    betas_hat: Tensor,
+    keys_ref: Tensor,
+    values_ref: Tensor,
+    betas_ref: Optional[Tensor] = None,
+) -> dict[str, Tensor]:
+    """Return stable per-query terms for quotient-residual forensics."""
+    z_hat, n_hat, z_ref, n_ref = _stable_terms_with_shared_max(
+        queries,
+        keys_hat,
+        values_hat,
+        betas_hat,
+        keys_ref,
+        values_ref,
+        betas_ref,
+    )
+    a_ref = n_ref / z_ref.unsqueeze(-1)
+    delta_z = z_hat - z_ref
+    delta_n = n_hat - n_ref
+    quotient_residual = delta_n - a_ref * delta_z.unsqueeze(-1)
+    output_error = quotient_residual / z_ref.unsqueeze(-1)
+    return {
+        "z_hat": z_hat,
+        "z_ref": z_ref,
+        "n_hat": n_hat,
+        "n_ref": n_ref,
+        "a_ref": a_ref,
+        "delta_z": delta_z,
+        "delta_n": delta_n,
+        "quotient_residual": quotient_residual,
+        "output_error": output_error,
+    }
+
+
+def compute_output_error_from_quotient_residual(
+    queries: Tensor,
+    keys_hat: Tensor,
+    values_hat: Tensor,
+    betas_hat: Tensor,
+    keys_ref: Tensor,
+    values_ref: Tensor,
+    betas_ref: Optional[Tensor] = None,
+) -> Tensor:
+    """Compute A_hat - A_ref via the quotient residual identity."""
+    diagnostics = compute_quotient_residual_diagnostics(
+        queries,
+        keys_hat,
+        values_hat,
+        betas_hat,
+        keys_ref,
+        values_ref,
+        betas_ref,
+    )
+    return diagnostics["output_error"]
+
+
+def loss_quotient_residual(
+    queries: Tensor,
+    weights: Tensor,
+    keys_hat: Tensor,
+    values_hat: Tensor,
+    betas_hat: Tensor,
+    keys_ref: Tensor,
+    values_ref: Tensor,
+    betas_ref: Optional[Tensor] = None,
+    output_scaled: bool = False,
+) -> Tensor:
+    """Compute weighted quotient-residual energy.
+
+    If output_scaled=True, this equals the true response error L_true exactly,
+    but expressed through the quotient residual identity.
+    """
+    quotient_residual = compute_quotient_residual(
+        queries,
+        keys_hat,
+        values_hat,
+        betas_hat,
+        keys_ref,
+        values_ref,
+        betas_ref,
+    )
+    sq_norm = quotient_residual.square().sum(dim=-1)
+    if output_scaled:
+        _z_hat, _n_hat, z_ref, _n_ref = _stable_terms_with_shared_max(
+            queries,
+            keys_hat,
+            values_hat,
+            betas_hat,
+            keys_ref,
+            values_ref,
+            betas_ref,
+        )
+        sq_norm = sq_norm / z_ref.square()
+    return (weights * sq_norm).sum()
 
 
 def loss_z(

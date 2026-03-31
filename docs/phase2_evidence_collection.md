@@ -7,16 +7,35 @@ lessons map onto this repo, and the concrete Phase 2 task list that follows.
 
 ## Current Regimes
 
-The experiment harness now has four distinct query-collection regimes:
+The experiment harness now has four main query-collection regimes in the Phase 2
+record:
 
 - `prefill`: encode-time queries over a known prompt prefix
 - `repeat-prefill`: offline control using `prompt + "Repeat it." + prompt`
-- `teacher-forced`: decode-time queries on a fixed known continuation
+- `teacher-forced-suffix`: decode-time queries on a fixed known continuation
 - `online`: decode-time queries on the model's own continuation
 
-The intended compacted object for `teacher-forced` and `online` is the
+The intended compacted object for `teacher-forced-suffix` and `online` is the
 **prompt-boundary cache**, not the final cache after continuation tokens have
 been appended.
+
+Terminology update: the repo now also has a separate
+`teacher-forced-full-prompt` mode for replaying the prompt itself token by token
+from an empty cache. That was not part of the original Phase 2 record, which is
+why this note uses the narrower suffix-control meaning throughout.
+
+Prompt-side policy update: when the project needs a dense prompt-only evidence
+regime, the preferred mode is still `prefill`, not `teacher-forced-full-prompt`.
+The prompt replay mode is retained as a control for measuring incremental
+prompt-path effects.
+
+The reason for that policy is now clearer:
+
+- prompt prefill and full prompt replay are **not** tensor-identical
+- but after canonicalizing prompt-bank construction, they are functionally very
+  close on the tested prompt
+- `prefill` is therefore the practical dense prompt-evidence regime
+- `teacher-forced-full-prompt` is a parity/control path, not the default
 
 ---
 
@@ -27,11 +46,11 @@ been appended.
 The old repo used explicit parity checks instead of trusting the online path by
 inspection. We should do the same. A collector that "runs" is not enough.
 
-### 2. Teacher-forced decode is a first-class control
+### 2. Teacher-forced suffix decode is a first-class control
 
-The old repo repeatedly used teacher-forced harvests as the stable dense
-control. That matches our current need: decode-like supervision without
-sampling noise.
+The old repo repeatedly used teacher-forced suffix harvests as the stable dense
+control. That matches the narrower continuation-side control used in this
+Phase 2 tranche: decode-like supervision without sampling noise.
 
 ### 3. Full eager outputs are expensive
 
@@ -124,6 +143,13 @@ Artifacts from tonight:
 - The `online` collector is now causal and on-policy.
 - The `teacher-forced` collector keeps the compacted object fixed at the
   prompt boundary and uses a known continuation one token at a time.
+- The prompt-side parity control now says:
+  - batched prompt prefill and full prompt replay are not numerically
+    identical at the raw tensor level
+  - after canonicalizing prompt-bank materialization and retention order, they
+    are functionally very close on the tested prompt
+  - this is strong enough to keep `prefill` as the preferred dense prompt-side
+    regime
 - The parity harness confirms:
   - **exact boundary KV parity** between prompt-only prefill, teacher-forced
     decode, and batched continuation prefill
@@ -232,6 +258,17 @@ The current broad Phase 2 read is therefore:
   after broadening the matrix.
 - More evidence does not rescue the `beta` stage in the attention-mass path.
 
+Quotient-residual interpretation:
+
+- this is exactly the pattern expected if beta-only repair often improves mass
+  matching without cancelling the coupled residual `δN - OδZ`
+- the stronger `recency+vfit` result then reads less like "values matter in
+  general" and more like "anchored value updates on a coherent support can move
+  the residual toward the local null direction"
+- this makes the Phase 2 positive signal more specific: the current win is not
+  just lower `L_true`, but evidence that support geometry changes what kinds of
+  quotient cancellation are reachable under local repair
+
 Layer-pattern note from the denser sweep:
 
 - `recency+vfit` is broadly positive on essentially every layer:
@@ -241,6 +278,24 @@ Layer-pattern note from the denser sweep:
 - `attn_mass` repairs degrade with depth rather than stabilizing:
   - `attn_mass+vfit` remains harmful on every tested `online` layer and on
     every tested `teacher-forced` layer, with the worst mean deltas at layer 28
+
+### Prompt-Side Regime Policy
+
+For prompt-only dense evidence, use:
+
+- `prefill` as the default project policy
+
+Use `teacher-forced-full-prompt` only when:
+
+- checking prompt-side prefill vs replay parity
+- testing whether a prompt-sensitive result depends on the incremental replay
+  execution path itself
+
+Do not treat `teacher-forced-full-prompt` as a stronger default regime than
+`prefill`. The current evidence supports a narrower claim:
+
+- replay is a useful control
+- prefill is the preferred practical regime
   - `attn_mass+phase1b` is uniformly harmful across all tested `online` layers
     and nearly so under `teacher-forced`
 
@@ -279,6 +334,17 @@ The current best explanation is therefore:
   decode-like evidence
 - `attn_mass` may be a good replay selector, but it looks too dispersed and
   heterogeneous to serve as a stable local repair basis in the same regime
+
+Quotient-residual update:
+
+- the current geometry story should now be treated as a proxy story, not the
+  endpoint
+- the sharper next question is whether `recency` supports are good because they
+  directly produce smaller output-scaled quotient residual after repair, or
+  because they merely correlate with some other unmeasured cancellation effect
+- that is the reason the next forensic reruns should log quotient-residual
+  diagnostics explicitly rather than continuing to rely only on stable rank,
+  adjacency, and low-singular update share
 
 ### OMP Control
 

@@ -88,6 +88,21 @@ $$L_{\text{lin}} = L_Z + \frac{1}{d_v} L_N$$
 
 **Surrogate quality in the poorly-initialized regime**: when initialization is weak (e.g., random support), denominator mismatch can be large and $L_{\text{lin}}$ is not a reliable proxy for $\hat{L}_{\text{true}}$. Pathologically, it is possible to reduce $L_Z$ and $L_N$ independently while the induced $A_{\hat{\mu}} = N_{\hat{\mu}} / Z_{\hat{\mu}}$ remains poor. The right response is not to avoid the surrogate — it is still the best cheap fitting target — but to treat verification as mandatory rather than optional. Use $L_{\text{lin}}$ for local refinement around a not-awful support; do not expect it to rescue a badly initialized representation.
 
+**Quotient-residual interpretation**: there is an exact local identity underneath
+the ratio objective:
+
+$$
+\hat A(q) - A(q) = \frac{\delta N(q) - A(q)\delta Z(q)}{Z(q) + \delta Z(q)}.
+$$
+
+So the observable local error object is not $\delta N$ or $\delta Z$ by
+themselves, but the coupled **quotient residual**
+$E(q) := \delta N(q) - A(q)\delta Z(q)$. In this repo, $L_Z$, $L_N$, and
+$L_{\text{lin}}$ remain the tractable fitting surrogates; the quotient residual
+is the sharper forensic and mechanism lens for understanding when those
+surrogates succeed or fail. See
+[quotient_residual.md](/home/csmith/projects/kv_operator_matching/docs/quotient_residual.md).
+
 ---
 
 ## 4. Concatenation Property

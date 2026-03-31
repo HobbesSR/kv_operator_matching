@@ -157,6 +157,16 @@ So the current best explanation is:
 - then repairing slightly better than OMP
 - not by preserving recency-style local coherence
 
+Quotient-residual update:
+
+- this means the current `ΔQ_coh` story should remain provisional until checked
+  against explicit quotient-residual diagnostics
+- the important mechanism question is not whether hybrid looks "more coherent"
+  in key-space geometry, but whether it lowers the initial residual or makes
+  the anchored value step cancel that residual more effectively
+- the next forensic tranche should therefore test whether `ΔQ_coh` is a real
+  quotient-aware proxy or only a correlated heuristic on the current surfaces
+
 ## Stress Read
 
 On the reduced stress surface (`layers 20,28`, budgets `12.5/25/50%`, denser

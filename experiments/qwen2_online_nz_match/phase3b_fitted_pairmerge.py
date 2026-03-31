@@ -74,7 +74,7 @@ def parse_args():
     p.add_argument(
         "--collection-modes",
         nargs="+",
-        default=["online", "teacher-forced", "repeat-prefill"],
+        default=["online", "teacher-forced-suffix", "repeat-prefill"],
     )
     p.add_argument(
         "--prompt-files",

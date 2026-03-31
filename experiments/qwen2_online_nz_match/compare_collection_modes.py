@@ -28,6 +28,7 @@ from kv_operator_matching.types import HeadState
 
 from run_experiment import (
     build_repeat_prefill_prompt,
+    collect_full_prompt_replay_kv_and_query_banks,
     collect_online_kv_and_query_banks,
     collect_teacher_forced_kv_and_query_banks,
     build_query_bank,
@@ -50,7 +51,7 @@ def parse_args():
     p.add_argument(
         "--collection-modes",
         nargs="+",
-        default=["online", "teacher-forced", "repeat-prefill"],
+        default=["online", "teacher-forced-suffix", "repeat-prefill"],
     )
     p.add_argument(
         "--prompt-files",
@@ -87,6 +88,8 @@ def collect_mode_state(
     n_heads = model.config.num_attention_heads
     n_kv_heads = model.config.num_key_value_heads
     qpk = n_heads // n_kv_heads
+    if mode == "teacher-forced":
+        mode = "teacher-forced-suffix"
 
     if mode == "online":
         bank_cfg = QueryBankConfig(max_queries=max_queries, weighting_scheme="recency")
@@ -114,7 +117,7 @@ def collect_mode_state(
             ),
         }
 
-    if mode == "teacher-forced":
+    if mode == "teacher-forced-suffix":
         bank_cfg = QueryBankConfig(max_queries=max_queries, weighting_scheme="uniform")
         continuation_token_ids = extract_teacher_forced_continuation_ids(
             tokenizer,
@@ -131,6 +134,31 @@ def collect_mode_state(
             bank_cfg,
             prefill_chunk_size=prefill_chunk_size,
             max_continuation_tokens=max_new_tokens,
+        )
+        retained_queries = len(next(iter(query_banks.values())))
+        return kv_states, query_banks, {
+            "collection_mode": mode,
+            "observed_positions": observed_tokens,
+            "query_heads_per_kv_head": qpk,
+            "raw_query_vectors_per_bank": observed_tokens * qpk,
+            "retained_query_vectors_per_bank": retained_queries,
+            "retained_position_equivalent": retained_queries / qpk,
+            "retained_opportunity_fraction": (
+                (retained_queries / qpk) / max(observed_tokens, 1)
+            ),
+        }
+
+    if mode == "teacher-forced-full-prompt":
+        bank_cfg = QueryBankConfig(max_queries=max_queries, weighting_scheme="uniform")
+        kv_states, query_banks, observed_tokens = collect_full_prompt_replay_kv_and_query_banks(
+            model,
+            tokenizer,
+            prompt,
+            device,
+            layers,
+            bank_cfg,
+            continue_online_after_boundary=False,
+            max_new_tokens=max_new_tokens,
         )
         retained_queries = len(next(iter(query_banks.values())))
         return kv_states, query_banks, {
@@ -290,8 +318,8 @@ def summarize_paired_delta_differences(rows: List[dict]) -> List[dict]:
         by_mode[key] = row["l_true"]
 
     mode_pairs = [
-        ("online", "teacher-forced"),
-        ("teacher-forced", "repeat-prefill"),
+        ("online", "teacher-forced-suffix"),
+        ("teacher-forced-suffix", "repeat-prefill"),
         ("online", "repeat-prefill"),
     ]
     summary = []

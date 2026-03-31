@@ -24,7 +24,13 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from kv_operator_matching.baselines import attention_mass_baseline, omp_mass_baseline, recency_baseline
 from kv_operator_matching.config import BetaFitConfig
-from kv_operator_matching.objectives import compute_logits, compute_response, compute_z, loss_n
+from kv_operator_matching.objectives import (
+    compute_logits,
+    compute_quotient_residual_diagnostics,
+    compute_response,
+    compute_z,
+    loss_n,
+)
 from kv_operator_matching.query_bank import QueryBank
 from kv_operator_matching.types import CompactRepresentation, HeadState
 from kv_operator_matching.value_fit import refit_values
@@ -50,6 +56,16 @@ class GeometryRow:
     vfit_l_z: float
     baseline_l_n_per_dim: float
     vfit_l_n_per_dim: float
+    baseline_delta_z_mse: float
+    vfit_delta_z_mse: float
+    baseline_delta_n_per_dim: float
+    vfit_delta_n_per_dim: float
+    baseline_qr_per_dim: float
+    vfit_qr_per_dim: float
+    baseline_qr_cancellation_gain: float
+    vfit_qr_cancellation_gain: float
+    baseline_qr_worst_ratio: float
+    vfit_qr_worst_ratio: float
     design_rank: int
     design_stable_rank: float
     design_condition_number: float
@@ -77,7 +93,7 @@ def parse_args():
     p.add_argument(
         "--collection-modes",
         nargs="+",
-        default=["online", "teacher-forced", "repeat-prefill"],
+        default=["online", "teacher-forced-suffix", "repeat-prefill"],
     )
     p.add_argument(
         "--prompt-files",
@@ -138,6 +154,33 @@ def per_query_error_stats(rep: CompactRepresentation, head_state: HeadState, qba
         "top5_share": float(weighted.topk(topk).values.sum().item() / total.item()),
         "median": float(per_q.median().item()),
         "max": float(per_q.max().item()),
+    }
+
+
+def quotient_stats(rep: CompactRepresentation, head_state: HeadState, qbank: QueryBank):
+    queries, weights = qbank.get_weighted_bank()
+    total_w = weights.sum().clamp(min=1e-12)
+    terms = compute_quotient_residual_diagnostics(
+        queries,
+        rep.support_keys,
+        rep.support_values,
+        rep.betas,
+        head_state.keys,
+        head_state.values,
+    )
+    d_v = head_state.values.shape[-1]
+    delta_z_sq = terms["delta_z"].square()
+    delta_n_sq = terms["delta_n"].square().sum(dim=-1)
+    o_delta_z_sq = (terms["a_ref"] * terms["delta_z"].unsqueeze(-1)).square().sum(dim=-1)
+    qr_sq = terms["quotient_residual"].square().sum(dim=-1)
+    cancellation_gain = 1.0 - qr_sq / (delta_n_sq + o_delta_z_sq).clamp(min=1e-12)
+    qr_ratio = qr_sq.sqrt() / terms["z_ref"].clamp(min=1e-12)
+    return {
+        "delta_z_mse": float(((weights * delta_z_sq).sum() / total_w).item()),
+        "delta_n_per_dim": float(((weights * delta_n_sq).sum() / (total_w * d_v)).item()),
+        "qr_per_dim": float(((weights * qr_sq).sum() / (total_w * d_v)).item()),
+        "qr_cancellation_gain": float(((weights * cancellation_gain).sum() / total_w).item()),
+        "qr_worst_ratio": float(qr_ratio.max().item()),
     }
 
 
@@ -239,6 +282,11 @@ def summarize_rows(rows: List[GeometryRow]) -> dict:
             "mean_delta_over_base": sum(r.delta_over_base_mean for r in group) / len(group),
             "mean_low_sv_delta_share": sum(r.low_sv_delta_share for r in group) / len(group),
             "mean_holdout_top5_error_share": sum(r.holdout_top5_error_share for r in group) / len(group),
+            "mean_baseline_qr_per_dim": sum(r.baseline_qr_per_dim for r in group) / len(group),
+            "mean_vfit_qr_per_dim": sum(r.vfit_qr_per_dim for r in group) / len(group),
+            "mean_baseline_qr_cancellation_gain": sum(r.baseline_qr_cancellation_gain for r in group) / len(group),
+            "mean_vfit_qr_cancellation_gain": sum(r.vfit_qr_cancellation_gain for r in group) / len(group),
+            "mean_vfit_qr_worst_ratio": sum(r.vfit_qr_worst_ratio for r in group) / len(group),
         }
     return summary
 
@@ -328,6 +376,8 @@ def main():
                             upd_stats = delta_stats(base_rep, vfit_rep, design)
                             base_l_true, base_l_z, base_l_n = compute_metrics(base_rep, head_state, holdout_qbank)
                             vfit_l_true, vfit_l_z, vfit_l_n = compute_metrics(vfit_rep, head_state, holdout_qbank)
+                            base_qr = quotient_stats(base_rep, head_state, holdout_qbank)
+                            vfit_qr = quotient_stats(vfit_rep, head_state, holdout_qbank)
                             err_stats = per_query_error_stats(vfit_rep, head_state, holdout_qbank)
 
                             rows.append(
@@ -347,6 +397,16 @@ def main():
                                     vfit_l_z=vfit_l_z,
                                     baseline_l_n_per_dim=base_l_n,
                                     vfit_l_n_per_dim=vfit_l_n,
+                                    baseline_delta_z_mse=base_qr["delta_z_mse"],
+                                    vfit_delta_z_mse=vfit_qr["delta_z_mse"],
+                                    baseline_delta_n_per_dim=base_qr["delta_n_per_dim"],
+                                    vfit_delta_n_per_dim=vfit_qr["delta_n_per_dim"],
+                                    baseline_qr_per_dim=base_qr["qr_per_dim"],
+                                    vfit_qr_per_dim=vfit_qr["qr_per_dim"],
+                                    baseline_qr_cancellation_gain=base_qr["qr_cancellation_gain"],
+                                    vfit_qr_cancellation_gain=vfit_qr["qr_cancellation_gain"],
+                                    baseline_qr_worst_ratio=base_qr["qr_worst_ratio"],
+                                    vfit_qr_worst_ratio=vfit_qr["qr_worst_ratio"],
                                     design_rank=d_stats["rank"],
                                     design_stable_rank=d_stats["stable_rank"],
                                     design_condition_number=d_stats["cond"],

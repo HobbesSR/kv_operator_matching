@@ -1,7 +1,14 @@
 # Experiment: Qwen 2 Online N/Z Operator Matching
 
 **Status**: Runnable smoke harness. Supports `prefill`, `repeat-prefill`,
-`teacher-forced`, and `online` query collection modes.
+`teacher-forced-suffix`, `teacher-forced-full-prompt`, and `online` query
+collection modes. The legacy `teacher-forced` CLI name remains as an explicit
+alias for `teacher-forced-suffix`.
+
+Project policy: for dense prompt-side evidence collection, prefer `prefill`.
+Use `teacher-forced-full-prompt` as a prompt-side control when you specifically
+want to measure incremental replay effects rather than as the default prompt
+evidence path.
 
 ---
 
@@ -17,9 +24,10 @@ Replicate the spirit of the Qwen 2 online experiment from `kv_compaction_experim
 2. **Run inference** on a set of evaluation prompts
 3. **Collect query vectors**:
    - `online`: prefill the prompt into cache, then capture decode-step queries during greedy generation
-   - `teacher-forced`: prefill the prompt into cache, then capture decode-step queries while feeding a fixed known continuation
+   - `teacher-forced-suffix`: prefill the prompt into cache, then capture decode-step queries while feeding a fixed known continuation
+   - `teacher-forced-full-prompt`: replay the prompt token by token from an empty cache to collect incremental prompt queries; optionally continue into real online decode at the boundary. This is a control path, not the preferred dense prompt-evidence regime.
    - `repeat-prefill`: use `prompt + "Repeat it." + prompt` as a stronger offline control
-   - `prefill`: use prompt queries as an offline proxy bank
+   - `prefill`: use prompt queries as an offline proxy bank. This is the preferred dense prompt-side evidence regime.
 4. **Build the empirical query bank**: maintain a rolling bank of query vectors per head, weighted by recency (configurable)
 5. **At each KV boundary** (configurable checkpoint interval):
    - For each head and layer, propose a compact support (recency / attention-mass / uniform)
@@ -50,6 +58,7 @@ See `config.yaml` for the experiment parameters. Key knobs:
 - [x] `repeat-prefill` control path
 - [x] `teacher-forced` decode control path
 - [x] Collector parity harness
+- [x] Prompt-side prefill vs full-replay control
 - [x] Opportunity-aware evidence accounting in experiment artifacts
 - [ ] Broader online evaluation over multiple prompts and boundaries
 - [ ] Port prompt loading / batching utilities
