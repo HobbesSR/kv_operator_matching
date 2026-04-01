@@ -246,6 +246,12 @@ Current repo status:
   `qvfit` success is tracked much more by quotient-specific row-scaling
   statistics like `zhat_over_zref_cv` and quotient-row concentration than by
   ordinary normalized-design conditioning
+- a hard-gated `qvfit` policy built from that statistic now beats plain
+  `vfit` on both the first-slice and broader stability surfaces, while a first
+  tempered quotient solve improved on raw `qvfit` but did not beat the gate
+- the refit side is now best understood as one row-metric fit family rather
+  than as unrelated methods:
+  [qfit_metric_family.md](/home/csmith/projects/kv_operator_matching/docs/qfit_metric_family.md)
 - so the quotient lens is now operationally relevant as a shortlist prior,
   and as a support-conditioned refit objective, while still not replacing the
   broader support-search stack

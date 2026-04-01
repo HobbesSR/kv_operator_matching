@@ -69,6 +69,9 @@ See [phase2_evidence_collection.md](/home/csmith/projects/kv_operator_matching/d
 See [phase3c_quotient_selector.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_quotient_selector.md) for the next selector-side experiment tranche.
 See [phase3c_shortlist_sweep.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_shortlist_sweep.md) for the shortlist-policy follow-up with fixed downstream OMP + `vfit`.
 See [phase3c_quotient_refit.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_quotient_refit.md) for the fixed-support quotient-aware refit tranche.
+See [phase3c_qvfit_diagnostics.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_qvfit_diagnostics.md) for the qvfit compatibility mechanism.
+See [phase3c_qvfit_policy.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_qvfit_policy.md) for the hard-gated and tempered qvfit policy comparison.
+See [qfit_metric_family.md](/home/csmith/projects/kv_operator_matching/docs/qfit_metric_family.md) for the unified row-metric view of `vfit`, `qvfit`, and the controlled refit family.
 
 Current selector-side status:
 - direct quotient-aware ranking is not a standalone replacement for
@@ -78,6 +81,7 @@ Current selector-side status:
   tight shortlist pressure
 - quotient-aware refit is also now a live experiment result, but it is support-
   conditioned rather than a default replacement for anchored `vfit`
+- hard-gated `qvfit` is now the current refit-side policy to beat
 
 ---
 

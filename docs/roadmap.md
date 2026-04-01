@@ -170,13 +170,16 @@ Tasks:
 - [x] Phase 3C qvfit compatibility tranche: inspect whether `qvfit` success or
   failure is better predicted by ordinary design geometry or by the
   quotient-weighted row-scaling geometry
+- [x] Phase 3C gated qvfit tranche: test a hard gate on
+  `zhat_over_zref_cv` against `vfit`, raw `qvfit`, and a tempered quotient
+  solve
 - [ ] Phase 3C mechanism tranche: inspect shortlist-content differences and
   regime asymmetry to explain why quotient-aware shortlist policies help in
   `online` / `repeat-prefill` but not `teacher-forced-suffix`, and why
   quotient-aware refit helps `attn_mass` but destabilizes `OMP` / `hybrid`
-- [ ] Phase 3C gated/regularized qvfit tranche: use the new compatibility
-  diagnostics to test a structural gate or quotient row-scaling control rather
-  than a free interpolation weight
+- [ ] Phase 3C controlled-qvfit tranche: beat the hard-gated `qvfit` policy
+  with a sharper row-scaling control such as clipping or quotient-metric
+  preconditioning, not a free interpolation weight
 
 Current note: the first Phase 3A selector and its supporting artifacts live in
 [phase3a_hybrid_selector.md](/home/csmith/projects/kv_operator_matching/docs/phase3a_hybrid_selector.md).
@@ -289,6 +292,16 @@ Current interpretation update:
 - that mechanism also survived the broader stability slice, and a simple hard
   gate on `zhat_over_zref_cv` beat both `always vfit` and `always qvfit` on
   the wider prompt surface
+- the first direct policy tranche in
+  [phase3c_qvfit_policy.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_qvfit_policy.md)
+  converted that mechanism into a real refit policy:
+  hard-gated `qvfit` beat plain `vfit` on both the first slice and the broader
+  stability slice, while the first tempered quotient solve improved on raw
+  `qvfit` but did not beat the gate
+- the formal interpretation is now documented in
+  [qfit_metric_family.md](/home/csmith/projects/kv_operator_matching/docs/qfit_metric_family.md):
+  `vfit`, `qvfit`, and their controlled variants are one fixed-support
+  weighted least-squares family with different row metrics over the query bank
 - the next question is therefore mechanism and regime asymmetry across both
   selection and refit, not whether quotient is operationally relevant at all
 
