@@ -188,6 +188,11 @@ The best current refit policy is now:
 with hard-gated `qvfit` demoted from "best policy" to "best simple universal
 baseline."
 
+That refit result has now also been re-adjudicated at stack level in
+[phase3c_stack_readjudication.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_stack_readjudication.md),
+where `attn_mass+qfit_diag` becomes the best tested overall stack on the
+canonical broad Phase 3 surface.
+
 The next question is no longer whether state-dependent metric control works.
 It does.
 

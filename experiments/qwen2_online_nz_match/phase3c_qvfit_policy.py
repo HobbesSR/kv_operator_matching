@@ -30,6 +30,7 @@ from kv_operator_matching.baselines import (  # noqa: E402
     hybrid_support_baseline,
     omp_mass_baseline,
     quotient_omit_omp_baseline,
+    shortlist_omp_baseline,
 )
 from kv_operator_matching.config import BetaFitConfig  # noqa: E402
 from kv_operator_matching.objectives import (  # noqa: E402
@@ -131,9 +132,14 @@ def parse_args():
             "quotient_omit_omp+qvfit_neff",
             "quotient_omit_omp+qvfit_kl",
             "quotient_omit_omp+qfit_diag",
+            "rank_blend_omp+vfit",
+            "rank_blend_omp+qfit_diag",
+            "two_stage_gate_omp+vfit",
+            "two_stage_gate_omp+qfit_diag",
         ],
     )
     p.add_argument("--shortlist-multiplier", type=float, default=2.0)
+    p.add_argument("--gate-expansion", type=int, default=2)
     p.add_argument(
         "--quotient-score-mode",
         choices=["exact_local", "proxy"],
@@ -331,6 +337,26 @@ def main():
                                 budget,
                                 shortlist_multiplier=args.shortlist_multiplier,
                                 exact_local=exact_local,
+                            )
+                        if any(method.startswith("rank_blend_omp") for method in args.methods):
+                            base_reps["rank_blend_omp"] = shortlist_omp_baseline(
+                                head_state,
+                                train_qbank,
+                                budget,
+                                shortlist_multiplier=args.shortlist_multiplier,
+                                shortlist_policy="rank_blend",
+                                exact_local=exact_local,
+                                gate_expansion=args.gate_expansion,
+                            )
+                        if any(method.startswith("two_stage_gate_omp") for method in args.methods):
+                            base_reps["two_stage_gate_omp"] = shortlist_omp_baseline(
+                                head_state,
+                                train_qbank,
+                                budget,
+                                shortlist_multiplier=args.shortlist_multiplier,
+                                shortlist_policy="two_stage_gate",
+                                exact_local=exact_local,
+                                gate_expansion=args.gate_expansion,
                             )
 
                         row_stats = {

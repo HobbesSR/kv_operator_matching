@@ -73,6 +73,7 @@ See [phase3c_qvfit_diagnostics.md](/home/csmith/projects/kv_operator_matching/do
 See [phase3c_qvfit_policy.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_qvfit_policy.md) for the hard-gated and tempered qvfit policy comparison.
 See [phase3c_qvfit_representativeness.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_qvfit_representativeness.md) for the ESS- and divergence-controlled qvfit follow-up.
 See [phase3c_qfit_controller.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_qfit_controller.md) for the diagnostic-conditioned measured qfit controller.
+See [phase3c_stack_readjudication.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_stack_readjudication.md) for the canonical broad-surface stack re-adjudication.
 See [qfit_metric_family.md](/home/csmith/projects/kv_operator_matching/docs/qfit_metric_family.md) for the unified row-metric view of `vfit`, `qvfit`, and the controlled refit family.
 
 Current selector-side status:
@@ -87,6 +88,8 @@ Current selector-side status:
 - the best current refit policy is the diagnostic-conditioned `qfit` controller
 - representativeness-controlled `qvfit` remains important because it supplies
   the middle branch of that controller
+- the best tested overall broad stack is now `attn_mass+qfit_diag` on the
+  canonical `q256/t32` Phase 3 surface
 
 ---
 

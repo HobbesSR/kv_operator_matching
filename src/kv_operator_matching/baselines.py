@@ -350,6 +350,51 @@ def quotient_omit_omp_baseline(
     )
 
 
+def shortlist_omp_baseline(
+    head_state: HeadState,
+    query_bank: QueryBank,
+    budget: int,
+    *,
+    shortlist_multiplier: float = 2.0,
+    shortlist_policy: str = "rank_blend",
+    exact_local: bool = True,
+    clamp_eps: float = 1e-6,
+    gate_expansion: int = 2,
+) -> CompactRepresentation:
+    """Run OMP inside a structural shortlist policy over original tokens."""
+    keys = head_state.keys
+    n = keys.shape[0]
+    m = min(budget, n)
+    if m <= 0:
+        return CompactRepresentation(
+            support_keys=keys[:0],
+            support_values=head_state.values[:0],
+            betas=torch.ones(0, dtype=keys.dtype, device=keys.device),
+        )
+
+    shortlist_size = min(n, max(m, int(round(shortlist_multiplier * m))))
+    attention_scores = compute_attention_mass_scores(head_state, query_bank)
+    quotient_scores = compute_quotient_omission_scores(
+        head_state,
+        query_bank,
+        exact_local=exact_local,
+        clamp_eps=clamp_eps,
+    )
+    shortlist_indices = shortlist_indices_from_scores(
+        attention_scores,
+        quotient_scores,
+        shortlist_size,
+        policy=shortlist_policy,
+        gate_expansion=gate_expansion,
+    )
+    return omp_over_shortlist(
+        head_state,
+        query_bank,
+        shortlist_indices,
+        m,
+    )
+
+
 def omp_mass_baseline(
     head_state: HeadState,
     query_bank: QueryBank,

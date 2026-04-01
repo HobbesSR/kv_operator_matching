@@ -178,6 +178,9 @@ Tasks:
   divergence-to-neutral bounds
 - [x] Phase 3C diagnostic-conditioned qfit tranche: replace the menu of fixed
   refit policies with one measured controller over the same metric family
+- [x] Phase 3C stack re-adjudication tranche: rerun the canonical broad Phase
+  3 surface with the measured `qfit` controller in the stack and re-decide
+  the overall incumbent
 - [ ] Phase 3C mechanism tranche: inspect shortlist-content differences and
   regime asymmetry to explain why quotient-aware shortlist policies help in
   `online` / `repeat-prefill` but not `teacher-forced-suffix`, and why
@@ -319,6 +322,13 @@ Current interpretation update:
   a simple diagnostic-conditioned `qfit` controller beats hard-gated `qvfit`
   on both the first slice and the broader stability slice while using all
   three metric branches in practice
+- the broad stack re-adjudication in
+  [phase3c_stack_readjudication.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_stack_readjudication.md)
+  then changed the project-level incumbent on the canonical `q256/t32`
+  surface:
+  `attn_mass+qfit_diag` beat `hybrid+vfit`, `hybrid+qfit_diag`, and the tested
+  quotient-shortlist stacks in overall mean holdout `L_true`, while also
+  winning `online`, `teacher-forced-suffix`, and `repeat-prefill`
 - the next question is therefore mechanism and regime asymmetry across both
   selection and refit, plus whether the measured refit controller can be
   smoothed further without losing the current win, not whether quotient is
