@@ -170,6 +170,9 @@ This is exactly the current `qvfit_temp` interpretation.
 
 More aggressive controls keep the same family but alter the row metric:
 
+- diagnostic-conditioned `qfit` controllers over the same family
+- ESS-controlled quotient metric
+- divergence-bounded quotient metric
 - quotient-ratio clipping
 - row-scale clipping
 - quotient-metric preconditioning

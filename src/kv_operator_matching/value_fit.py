@@ -137,13 +137,13 @@ def fit_values_quotient(
         return _fit_value_matrix(design, weighted_targets, ridge=config.value_ridge)
 
 
-def compute_qvfit_row_scaling_stats(
+def _compute_qvfit_row_terms(
     support_keys: Tensor,
     betas: Tensor,
     ref_keys: Tensor,
     query_bank: QueryBank,
-) -> dict[str, float]:
-    """Return quotient-row-scaling diagnostics for fixed-support qvfit."""
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Return bank weights plus fixed-support quotient row scales."""
     queries, weights = query_bank.get_weighted_bank()
     queries = queries.float()
     weights = weights.float()
@@ -163,24 +163,192 @@ def compute_qvfit_row_scaling_stats(
         exp_ref = torch.exp(logits_ref - shared_max)
         z_hat = exp_hat.sum(dim=-1).clamp(min=1e-30)
         z_ref = exp_ref.sum(dim=-1).clamp(min=1e-30)
-        z_ratio = z_hat / z_ref
-        weight_total = weights.sum().clamp(min=1e-12)
-        z_ratio_mean = float((weights * z_ratio).sum().item() / weight_total.item())
-        z_ratio_centered = z_ratio - z_ratio_mean
-        z_ratio_var = float((weights * z_ratio_centered.square()).sum().item() / weight_total.item())
-        row_energy = weights * z_hat.square()
-        row_energy_total = row_energy.sum().clamp(min=1e-12)
-        topk = min(5, int(row_energy.numel()))
-        row_energy_top5_share = float(row_energy.topk(topk).values.sum().item() / row_energy_total.item())
-        row_mean = float(row_energy.mean().item())
-        row_std = float(row_energy.std(unbiased=False).item())
-        row_energy_cv = row_std / max(row_mean, 1e-12)
-        return {
-            "zhat_over_zref_mean": z_ratio_mean,
-            "zhat_over_zref_cv": z_ratio_var**0.5 / max(z_ratio_mean, 1e-12),
-            "q_row_energy_top5_share": row_energy_top5_share,
-            "q_row_energy_cv": row_energy_cv,
-        }
+    return weights, z_hat, z_ref
+
+
+def _compute_qvfit_row_scaling_stats_from_terms(
+    weights: Tensor,
+    z_hat: Tensor,
+    z_ref: Tensor,
+    *,
+    row_scale_power: float = 1.0,
+) -> dict[str, float]:
+    """Summarize the quotient-induced row metric at a chosen power."""
+    if row_scale_power < 0.0:
+        raise ValueError(f"row_scale_power must be nonnegative, got {row_scale_power!r}.")
+
+    weight_total = weights.sum().clamp(min=1e-12)
+    z_ratio = z_hat / z_ref
+    z_ratio_mean = float((weights * z_ratio).sum().item() / weight_total.item())
+    z_ratio_centered = z_ratio - z_ratio_mean
+    z_ratio_var = float((weights * z_ratio_centered.square()).sum().item() / weight_total.item())
+
+    neutral_probs = (weights / weight_total).clamp(min=1e-30)
+    row_energy = weights * z_hat.pow(2.0 * row_scale_power)
+    row_energy_total = row_energy.sum().clamp(min=1e-12)
+    row_probs = (row_energy / row_energy_total).clamp(min=1e-30)
+
+    topk = min(5, int(row_energy.numel()))
+    row_energy_top5_share = float(row_energy.topk(topk).values.sum().item() / row_energy_total.item())
+    row_mean = float(row_energy.mean().item())
+    row_std = float(row_energy.std(unbiased=False).item())
+    row_energy_cv = row_std / max(row_mean, 1e-12)
+    q_weight_neff = float(1.0 / row_probs.square().sum().item())
+    neutral_neff = float(1.0 / neutral_probs.square().sum().item())
+    q_weight_kl_to_neutral = float(
+        (row_probs * (torch.log(row_probs) - torch.log(neutral_probs))).sum().item()
+    )
+    q_weight_entropy = float((-(row_probs * torch.log(row_probs))).sum().item())
+    return {
+        "row_scale_power": float(row_scale_power),
+        "zhat_over_zref_mean": z_ratio_mean,
+        "zhat_over_zref_cv": z_ratio_var**0.5 / max(z_ratio_mean, 1e-12),
+        "q_row_energy_top5_share": row_energy_top5_share,
+        "q_row_energy_cv": row_energy_cv,
+        "q_weight_neff": q_weight_neff,
+        "q_weight_neff_fraction": q_weight_neff / max(neutral_neff, 1e-12),
+        "q_weight_kl_to_neutral": q_weight_kl_to_neutral,
+        "q_weight_entropy": q_weight_entropy,
+    }
+
+
+def compute_qvfit_row_scaling_stats(
+    support_keys: Tensor,
+    betas: Tensor,
+    ref_keys: Tensor,
+    query_bank: QueryBank,
+    *,
+    row_scale_power: float = 1.0,
+) -> dict[str, float]:
+    """Return quotient-row-scaling diagnostics for fixed-support qvfit."""
+    weights, z_hat, z_ref = _compute_qvfit_row_terms(
+        support_keys,
+        betas,
+        ref_keys,
+        query_bank,
+    )
+    return _compute_qvfit_row_scaling_stats_from_terms(
+        weights,
+        z_hat,
+        z_ref,
+        row_scale_power=row_scale_power,
+    )
+
+
+def choose_qvfit_row_scale_power(
+    support_keys: Tensor,
+    betas: Tensor,
+    ref_keys: Tensor,
+    query_bank: QueryBank,
+    *,
+    min_neff_fraction: float | None = None,
+    max_kl_to_neutral: float | None = None,
+    grid_size: int = 65,
+) -> tuple[float, dict[str, float]]:
+    """Choose the strongest quotient row metric that stays bank-representative."""
+    if min_neff_fraction is None and max_kl_to_neutral is None:
+        raise ValueError("At least one representativeness constraint must be provided.")
+    if min_neff_fraction is not None and min_neff_fraction <= 0.0:
+        raise ValueError(f"min_neff_fraction must be positive, got {min_neff_fraction!r}.")
+    if max_kl_to_neutral is not None and max_kl_to_neutral < 0.0:
+        raise ValueError(f"max_kl_to_neutral must be nonnegative, got {max_kl_to_neutral!r}.")
+    if grid_size < 2:
+        raise ValueError(f"grid_size must be at least 2, got {grid_size!r}.")
+
+    weights, z_hat, z_ref = _compute_qvfit_row_terms(
+        support_keys,
+        betas,
+        ref_keys,
+        query_bank,
+    )
+    for step in range(grid_size):
+        gamma = 1.0 - (step / (grid_size - 1))
+        stats = _compute_qvfit_row_scaling_stats_from_terms(
+            weights,
+            z_hat,
+            z_ref,
+            row_scale_power=gamma,
+        )
+        ok = True
+        if min_neff_fraction is not None:
+            ok = ok and (stats["q_weight_neff_fraction"] >= min_neff_fraction)
+        if max_kl_to_neutral is not None:
+            ok = ok and (stats["q_weight_kl_to_neutral"] <= max_kl_to_neutral)
+        if ok:
+            return gamma, stats
+    return 0.0, _compute_qvfit_row_scaling_stats_from_terms(
+        weights,
+        z_hat,
+        z_ref,
+        row_scale_power=0.0,
+    )
+
+
+def choose_diagnostic_qfit_row_scale_power(
+    support_keys: Tensor,
+    betas: Tensor,
+    ref_keys: Tensor,
+    query_bank: QueryBank,
+    *,
+    full_metric_max_kl_to_neutral: float,
+    hard_gate_zhat_over_zref_cv: float,
+    middle_control: str = "kl",
+    middle_min_neff_fraction: float = 0.5,
+    middle_max_kl_to_neutral: float = 0.25,
+    grid_size: int = 65,
+) -> tuple[float, dict[str, float], str]:
+    """Choose a diagnostic-conditioned row metric for qfit.
+
+    Policy:
+    - if the full quotient metric is already close enough to the neutral bank
+      metric, use full qvfit
+    - if quotient row-scaling dispersion is clearly too large, fall back to the
+      neutral metric
+    - otherwise use the strongest admissible smooth middle control
+    """
+    if middle_control not in {"kl", "neff"}:
+        raise ValueError(f"Unsupported middle_control: {middle_control!r}.")
+
+    full_stats = compute_qvfit_row_scaling_stats(
+        support_keys,
+        betas,
+        ref_keys,
+        query_bank,
+        row_scale_power=1.0,
+    )
+    if full_stats["q_weight_kl_to_neutral"] <= full_metric_max_kl_to_neutral:
+        return 1.0, full_stats, "full_quotient"
+
+    if full_stats["zhat_over_zref_cv"] >= hard_gate_zhat_over_zref_cv:
+        neutral_stats = compute_qvfit_row_scaling_stats(
+            support_keys,
+            betas,
+            ref_keys,
+            query_bank,
+            row_scale_power=0.0,
+        )
+        return 0.0, neutral_stats, "neutral_fallback"
+
+    if middle_control == "kl":
+        gamma, stats = choose_qvfit_row_scale_power(
+            support_keys,
+            betas,
+            ref_keys,
+            query_bank,
+            max_kl_to_neutral=middle_max_kl_to_neutral,
+            grid_size=grid_size,
+        )
+    else:
+        gamma, stats = choose_qvfit_row_scale_power(
+            support_keys,
+            betas,
+            ref_keys,
+            query_bank,
+            min_neff_fraction=middle_min_neff_fraction,
+            grid_size=grid_size,
+        )
+    branch = "neutral_fallback" if gamma == 0.0 else f"middle_{middle_control}"
+    return gamma, stats, branch
 
 
 def refit_values(

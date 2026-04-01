@@ -39,6 +39,8 @@ from kv_operator_matching.objectives import (  # noqa: E402
 from kv_operator_matching.query_bank import QueryBank  # noqa: E402
 from kv_operator_matching.types import CompactRepresentation, HeadState  # noqa: E402
 from kv_operator_matching.value_fit import (  # noqa: E402
+    choose_diagnostic_qfit_row_scale_power,
+    choose_qvfit_row_scale_power,
     compute_qvfit_row_scaling_stats,
     refit_values,
     refit_values_quotient,
@@ -61,6 +63,10 @@ class PolicyRow:
     holdout_queries: int
     train_zhat_over_zref_cv: float
     train_q_row_energy_top5_share: float
+    selected_q_weight_neff_fraction: float
+    selected_q_weight_kl_to_neutral: float
+    q_metric_strength: float
+    controller_branch: str
     used_qvfit: float
     holdout_l_true: float
     holdout_qr_per_dim: float
@@ -101,18 +107,30 @@ def parse_args():
             "attn_mass+qvfit",
             "attn_mass+qvfit_gate",
             "attn_mass+qvfit_temp",
+            "attn_mass+qvfit_neff",
+            "attn_mass+qvfit_kl",
+            "attn_mass+qfit_diag",
             "omp+vfit",
             "omp+qvfit",
             "omp+qvfit_gate",
             "omp+qvfit_temp",
+            "omp+qvfit_neff",
+            "omp+qvfit_kl",
+            "omp+qfit_diag",
             "hybrid+vfit",
             "hybrid+qvfit",
             "hybrid+qvfit_gate",
             "hybrid+qvfit_temp",
+            "hybrid+qvfit_neff",
+            "hybrid+qvfit_kl",
+            "hybrid+qfit_diag",
             "quotient_omit_omp+vfit",
             "quotient_omit_omp+qvfit",
             "quotient_omit_omp+qvfit_gate",
             "quotient_omit_omp+qvfit_temp",
+            "quotient_omit_omp+qvfit_neff",
+            "quotient_omit_omp+qvfit_kl",
+            "quotient_omit_omp+qfit_diag",
         ],
     )
     p.add_argument("--shortlist-multiplier", type=float, default=2.0)
@@ -123,6 +141,12 @@ def parse_args():
     )
     p.add_argument("--gate-threshold", type=float, default=0.25)
     p.add_argument("--temp-power", type=float, default=0.5)
+    p.add_argument("--neff-floor-fraction", type=float, default=0.5)
+    p.add_argument("--max-kl-to-neutral", type=float, default=0.25)
+    p.add_argument("--gamma-grid-size", type=int, default=65)
+    p.add_argument("--controller-full-kl-threshold", type=float, default=0.9)
+    p.add_argument("--controller-hard-gate-cv-threshold", type=float, default=0.5)
+    p.add_argument("--controller-middle-control", choices=["kl", "neff"], default="kl")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--save-json", default="results/scratch/phase3c_qvfit_policy.json")
     return p.parse_args()
@@ -207,7 +231,18 @@ def summarize_rows(rows: List[PolicyRow]) -> dict[str, dict[str, float]]:
             "mean_train_q_row_energy_top5_share": (
                 sum(r.train_q_row_energy_top5_share for r in group) / len(group)
             ),
+            "mean_selected_q_weight_neff_fraction": (
+                sum(r.selected_q_weight_neff_fraction for r in group) / len(group)
+            ),
+            "mean_selected_q_weight_kl_to_neutral": (
+                sum(r.selected_q_weight_kl_to_neutral for r in group) / len(group)
+            ),
+            "mean_q_metric_strength": sum(r.q_metric_strength for r in group) / len(group),
             "qvfit_use_rate": sum(r.used_qvfit for r in group) / len(group),
+            "full_quotient_rate": sum(r.controller_branch == "full_quotient" for r in group) / len(group),
+            "middle_kl_rate": sum(r.controller_branch == "middle_kl" for r in group) / len(group),
+            "middle_neff_rate": sum(r.controller_branch == "middle_neff" for r in group) / len(group),
+            "neutral_fallback_rate": sum(r.controller_branch == "neutral_fallback" for r in group) / len(group),
             "mean_delta_vs_vfit_peer": (sum(deltas_vs_vfit) / len(deltas_vs_vfit))
             if deltas_vs_vfit
             else 0.0,
@@ -302,17 +337,72 @@ def main():
                             name: compute_qvfit_row_scaling_stats(rep.support_keys, rep.betas, keys, train_qbank)
                             for name, rep in base_reps.items()
                         }
+                        neff_controls = {}
+                        if any(method.endswith("+qvfit_neff") for method in args.methods):
+                            neff_controls = {
+                                name: choose_qvfit_row_scale_power(
+                                    rep.support_keys,
+                                    rep.betas,
+                                    keys,
+                                    train_qbank,
+                                    min_neff_fraction=args.neff_floor_fraction,
+                                    grid_size=args.gamma_grid_size,
+                                )
+                                for name, rep in base_reps.items()
+                            }
+                        kl_controls = {}
+                        if any(method.endswith("+qvfit_kl") for method in args.methods):
+                            kl_controls = {
+                                name: choose_qvfit_row_scale_power(
+                                    rep.support_keys,
+                                    rep.betas,
+                                    keys,
+                                    train_qbank,
+                                    max_kl_to_neutral=args.max_kl_to_neutral,
+                                    grid_size=args.gamma_grid_size,
+                                )
+                                for name, rep in base_reps.items()
+                            }
+                        diag_controls = {}
+                        if any(method.endswith("+qfit_diag") for method in args.methods):
+                            diag_controls = {
+                                name: choose_diagnostic_qfit_row_scale_power(
+                                    rep.support_keys,
+                                    rep.betas,
+                                    keys,
+                                    train_qbank,
+                                    full_metric_max_kl_to_neutral=args.controller_full_kl_threshold,
+                                    hard_gate_zhat_over_zref_cv=args.controller_hard_gate_cv_threshold,
+                                    middle_control=args.controller_middle_control,
+                                    middle_min_neff_fraction=args.neff_floor_fraction,
+                                    middle_max_kl_to_neutral=args.max_kl_to_neutral,
+                                    grid_size=args.gamma_grid_size,
+                                )
+                                for name, rep in base_reps.items()
+                            }
 
                         for method in args.methods:
                             base_name = method.split("+", 1)[0]
                             base_rep = base_reps[base_name]
                             stats = row_stats[base_name]
                             used_qvfit = 0.0
+                            q_metric_strength = 0.0
+                            controller_branch = "neutral_fallback"
+                            selected_stats = compute_qvfit_row_scaling_stats(
+                                base_rep.support_keys,
+                                base_rep.betas,
+                                keys,
+                                train_qbank,
+                                row_scale_power=0.0,
+                            )
                             if method.endswith("+vfit"):
                                 rep = refit_values(base_rep, keys, values, train_qbank, beta_cfg)
                             elif method.endswith("+qvfit"):
                                 rep = refit_values_quotient(base_rep, keys, values, train_qbank, beta_cfg)
                                 used_qvfit = 1.0
+                                q_metric_strength = 1.0
+                                controller_branch = "full_quotient"
+                                selected_stats = stats
                             elif method.endswith("+qvfit_gate"):
                                 gate_open = stats["zhat_over_zref_cv"] <= args.gate_threshold
                                 rep = refit_values_quotient_gated(
@@ -324,6 +414,15 @@ def main():
                                     zhat_over_zref_cv_threshold=args.gate_threshold,
                                 )
                                 used_qvfit = 1.0 if gate_open else 0.0
+                                q_metric_strength = 1.0 if gate_open else 0.0
+                                controller_branch = "full_quotient" if gate_open else "neutral_fallback"
+                                selected_stats = stats if gate_open else compute_qvfit_row_scaling_stats(
+                                    base_rep.support_keys,
+                                    base_rep.betas,
+                                    keys,
+                                    train_qbank,
+                                    row_scale_power=0.0,
+                                )
                             elif method.endswith("+qvfit_temp"):
                                 rep = refit_values_quotient(
                                     base_rep,
@@ -334,6 +433,68 @@ def main():
                                     row_scale_power=args.temp_power,
                                 )
                                 used_qvfit = 1.0
+                                q_metric_strength = float(args.temp_power)
+                                controller_branch = "middle_temp"
+                                selected_stats = compute_qvfit_row_scaling_stats(
+                                    base_rep.support_keys,
+                                    base_rep.betas,
+                                    keys,
+                                    train_qbank,
+                                    row_scale_power=args.temp_power,
+                                )
+                            elif method.endswith("+qvfit_neff"):
+                                gamma, control_stats = neff_controls[base_name]
+                                if gamma == 0.0:
+                                    rep = refit_values(base_rep, keys, values, train_qbank, beta_cfg)
+                                    used_qvfit = 0.0
+                                else:
+                                    rep = refit_values_quotient(
+                                        base_rep,
+                                        keys,
+                                        values,
+                                        train_qbank,
+                                        beta_cfg,
+                                        row_scale_power=gamma,
+                                    )
+                                    used_qvfit = 1.0
+                                q_metric_strength = gamma
+                                controller_branch = "neutral_fallback" if gamma == 0.0 else "middle_neff"
+                                selected_stats = control_stats
+                            elif method.endswith("+qvfit_kl"):
+                                gamma, control_stats = kl_controls[base_name]
+                                if gamma == 0.0:
+                                    rep = refit_values(base_rep, keys, values, train_qbank, beta_cfg)
+                                    used_qvfit = 0.0
+                                else:
+                                    rep = refit_values_quotient(
+                                        base_rep,
+                                        keys,
+                                        values,
+                                        train_qbank,
+                                        beta_cfg,
+                                        row_scale_power=gamma,
+                                    )
+                                    used_qvfit = 1.0
+                                q_metric_strength = gamma
+                                controller_branch = "neutral_fallback" if gamma == 0.0 else "middle_kl"
+                                selected_stats = control_stats
+                            elif method.endswith("+qfit_diag"):
+                                gamma, control_stats, controller_branch = diag_controls[base_name]
+                                if gamma == 0.0:
+                                    rep = refit_values(base_rep, keys, values, train_qbank, beta_cfg)
+                                    used_qvfit = 0.0
+                                else:
+                                    rep = refit_values_quotient(
+                                        base_rep,
+                                        keys,
+                                        values,
+                                        train_qbank,
+                                        beta_cfg,
+                                        row_scale_power=gamma,
+                                    )
+                                    used_qvfit = 1.0
+                                q_metric_strength = gamma
+                                selected_stats = control_stats
                             else:
                                 raise ValueError(f"Unsupported method: {method}")
 
@@ -350,6 +511,10 @@ def main():
                                     holdout_queries=len(holdout_qbank),
                                     train_zhat_over_zref_cv=stats["zhat_over_zref_cv"],
                                     train_q_row_energy_top5_share=stats["q_row_energy_top5_share"],
+                                    selected_q_weight_neff_fraction=selected_stats["q_weight_neff_fraction"],
+                                    selected_q_weight_kl_to_neutral=selected_stats["q_weight_kl_to_neutral"],
+                                    q_metric_strength=q_metric_strength,
+                                    controller_branch=controller_branch,
                                     used_qvfit=used_qvfit,
                                     holdout_l_true=compute_l_true(rep, head_state, holdout_qbank),
                                     holdout_qr_per_dim=qstats["qr_per_dim"],

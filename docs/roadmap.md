@@ -173,13 +173,18 @@ Tasks:
 - [x] Phase 3C gated qvfit tranche: test a hard gate on
   `zhat_over_zref_cv` against `vfit`, raw `qvfit`, and a tempered quotient
   solve
+- [x] Phase 3C representativeness-controlled qvfit tranche: test smooth
+  admissibility controls on the quotient row metric via ESS floors and
+  divergence-to-neutral bounds
+- [x] Phase 3C diagnostic-conditioned qfit tranche: replace the menu of fixed
+  refit policies with one measured controller over the same metric family
 - [ ] Phase 3C mechanism tranche: inspect shortlist-content differences and
   regime asymmetry to explain why quotient-aware shortlist policies help in
   `online` / `repeat-prefill` but not `teacher-forced-suffix`, and why
   quotient-aware refit helps `attn_mass` but destabilizes `OMP` / `hybrid`
-- [ ] Phase 3C controlled-qvfit tranche: beat the hard-gated `qvfit` policy
-  with a sharper row-scaling control such as clipping or quotient-metric
-  preconditioning, not a free interpolation weight
+- [ ] Phase 3C continuous-qfit tranche: replace the current thresholded
+  controller with a smoother measured metric law while preserving the current
+  policy win over hard-gated `qvfit`
 
 Current note: the first Phase 3A selector and its supporting artifacts live in
 [phase3a_hybrid_selector.md](/home/csmith/projects/kv_operator_matching/docs/phase3a_hybrid_selector.md).
@@ -302,8 +307,22 @@ Current interpretation update:
   [qfit_metric_family.md](/home/csmith/projects/kv_operator_matching/docs/qfit_metric_family.md):
   `vfit`, `qvfit`, and their controlled variants are one fixed-support
   weighted least-squares family with different row metrics over the query bank
+- the follow-up tranche in
+  [phase3c_qvfit_representativeness.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_qvfit_representativeness.md)
+  showed that smoother admissibility controls are real but not yet dominant:
+  ESS- and divergence-controlled `qvfit` beat plain `vfit` and substantially
+  improve on raw `qvfit`, but the hard gate still wins overall while the
+  smoother controls specifically recover `hybrid` supports better than the gate
+- the next tranche in
+  [phase3c_qfit_controller.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_qfit_controller.md)
+  now completes that policy layer:
+  a simple diagnostic-conditioned `qfit` controller beats hard-gated `qvfit`
+  on both the first slice and the broader stability slice while using all
+  three metric branches in practice
 - the next question is therefore mechanism and regime asymmetry across both
-  selection and refit, not whether quotient is operationally relevant at all
+  selection and refit, plus whether the measured refit controller can be
+  smoothed further without losing the current win, not whether quotient is
+  operationally relevant at all
 
 The centroid/operator-role assignment precursor in
 [phase3b_centroid_region_precursor.md](/home/csmith/projects/kv_operator_matching/docs/phase3b_centroid_region_precursor.md)

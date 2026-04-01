@@ -252,6 +252,16 @@ Current repo status:
 - the refit side is now best understood as one row-metric fit family rather
   than as unrelated methods:
   [qfit_metric_family.md](/home/csmith/projects/kv_operator_matching/docs/qfit_metric_family.md)
+- smoother admissibility controls on that same family are now also real:
+  ESS- and divergence-controlled `qvfit` beat plain `vfit` and strongly improve
+  on raw `qvfit`, but the hard gate still wins overall while the smoother
+  controls recover some `hybrid` supports better than the gate:
+  [phase3c_qvfit_representativeness.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_qvfit_representativeness.md)
+- that result has now been pushed one step further into a single measured
+  refit law:
+  [phase3c_qfit_controller.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_qfit_controller.md)
+  shows a diagnostic-conditioned `qfit` controller beating hard-gated `qvfit`
+  on both the first slice and the broader stability surface
 - so the quotient lens is now operationally relevant as a shortlist prior,
   and as a support-conditioned refit objective, while still not replacing the
   broader support-search stack

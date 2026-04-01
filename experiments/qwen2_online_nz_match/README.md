@@ -71,6 +71,8 @@ See [phase3c_shortlist_sweep.md](/home/csmith/projects/kv_operator_matching/docs
 See [phase3c_quotient_refit.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_quotient_refit.md) for the fixed-support quotient-aware refit tranche.
 See [phase3c_qvfit_diagnostics.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_qvfit_diagnostics.md) for the qvfit compatibility mechanism.
 See [phase3c_qvfit_policy.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_qvfit_policy.md) for the hard-gated and tempered qvfit policy comparison.
+See [phase3c_qvfit_representativeness.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_qvfit_representativeness.md) for the ESS- and divergence-controlled qvfit follow-up.
+See [phase3c_qfit_controller.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_qfit_controller.md) for the diagnostic-conditioned measured qfit controller.
 See [qfit_metric_family.md](/home/csmith/projects/kv_operator_matching/docs/qfit_metric_family.md) for the unified row-metric view of `vfit`, `qvfit`, and the controlled refit family.
 
 Current selector-side status:
@@ -81,7 +83,10 @@ Current selector-side status:
   tight shortlist pressure
 - quotient-aware refit is also now a live experiment result, but it is support-
   conditioned rather than a default replacement for anchored `vfit`
-- hard-gated `qvfit` is now the current refit-side policy to beat
+- hard-gated `qvfit` is now the simple refit-side baseline to beat
+- the best current refit policy is the diagnostic-conditioned `qfit` controller
+- representativeness-controlled `qvfit` remains important because it supplies
+  the middle branch of that controller
 
 ---
 
