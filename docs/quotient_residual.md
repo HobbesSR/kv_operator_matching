@@ -214,3 +214,38 @@ The right next use is not a full objective rewrite. It is:
 
 That keeps the theory tied to the current empirical program instead of turning
 into a parallel speculative branch.
+
+The first selector-side experiment should be deliberately narrow:
+
+- rank original tokens by a bank-aggregated quotient-aware omission score
+- compare that against plain attention-mass support
+- then check whether any gain survives anchored value refit
+- then test the same score only as a shortlist for the existing OMP path
+
+This is the smallest direct test of whether the quotient lens improves support
+selection itself rather than only explaining results after the fact.
+
+One caveat should stay explicit: exact local cancellation does not remove the
+need for mass fidelity under concatenation. Even a selector built from local
+`E(q)` still has to be judged on deployed-style held-out response error, not on
+local cancellation alone.
+
+Current repo status:
+
+- direct quotient-aware omission ranking did not become a new standalone
+  selector winner
+- quotient-aware shortlist construction *did* produce real downstream wins once
+  combined with fixed downstream OMP + `vfit`
+- those wins currently concentrate in `online` and `repeat-prefill`, especially
+  at tight shortlist multipliers (`1.5x-2.0x`)
+- fixed-support quotient-aware refit also produced real gains, but only for
+  some support families:
+  `attn_mass+qvfit` beat `attn_mass+vfit` across all three tested regimes,
+  while `OMP` / `hybrid` generally did not benefit
+- the first compatibility diagnostics suggest why:
+  `qvfit` success is tracked much more by quotient-specific row-scaling
+  statistics like `zhat_over_zref_cv` and quotient-row concentration than by
+  ordinary normalized-design conditioning
+- so the quotient lens is now operationally relevant as a shortlist prior,
+  and as a support-conditioned refit objective, while still not replacing the
+  broader support-search stack

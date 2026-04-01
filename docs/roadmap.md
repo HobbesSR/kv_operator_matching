@@ -148,10 +148,35 @@ Tasks:
 - [ ] Empirical tests of spectral decay in the query-key kernel matrix (Open Question 2)
 - [ ] Positional encoding interaction study: does RoPE structure in key vectors affect support quality? (Open Question 5)
 - [ ] More principled merge proposal logic: conditions under which a good merge exists (toward Open Question 6)
-- [ ] Quotient-residual forensic tranche: add explicit residual diagnostics to
+- [x] Quotient-residual forensic tranche: add explicit residual diagnostics to
   the Phase 2 / 3 forensic scripts and check whether they explain the known
   beta-only, `vfit`, hybrid, and merge results better than the current proxy
   geometry alone
+- [x] Phase 3C: run the first quotient-aware selector tranche:
+  replace pure attention-mass ranking with a bank-aggregated quotient-aware
+  omission score over original tokens, then compare against `attn_mass`, OMP,
+  and hybrid with and without `vfit`
+- [x] Phase 3C follow-up: test quotient-aware shortlist + existing OMP before
+  attempting a full E-aware OMP objective
+- [x] Phase 3C shortlist sweep: compare structural shortlist policies
+  (`attn_mass`, `quotient_omit`, equal-rank blend, two-stage gate) with fixed
+  downstream OMP + `vfit`, and inspect shortlist overlap plus conformist-filter
+  diagnostics
+- [x] Phase 3C stability tranche: broaden the shortlist sweep over more prompt
+  slices while emphasizing the small shortlist multipliers where the first
+  wins appeared, and treat shortlist-size interaction as a first-class finding
+- [x] Phase 3C fixed-support refit tranche: hold support fixed and compare
+  ordinary anchored `vfit` against quotient-aware `qvfit`
+- [x] Phase 3C qvfit compatibility tranche: inspect whether `qvfit` success or
+  failure is better predicted by ordinary design geometry or by the
+  quotient-weighted row-scaling geometry
+- [ ] Phase 3C mechanism tranche: inspect shortlist-content differences and
+  regime asymmetry to explain why quotient-aware shortlist policies help in
+  `online` / `repeat-prefill` but not `teacher-forced-suffix`, and why
+  quotient-aware refit helps `attn_mass` but destabilizes `OMP` / `hybrid`
+- [ ] Phase 3C gated/regularized qvfit tranche: use the new compatibility
+  diagnostics to test a structural gate or quotient row-scaling control rather
+  than a free interpolation weight
 
 Current note: the first Phase 3A selector and its supporting artifacts live in
 [phase3a_hybrid_selector.md](/home/csmith/projects/kv_operator_matching/docs/phase3a_hybrid_selector.md).
@@ -217,6 +242,55 @@ also failed broadly:
 - so simple local constructed-atom families now look weak enough that the next
   3B move should be a larger framing shift rather than another small local
   construction tweak
+
+The next selector-side tranche is recorded in
+[phase3c_quotient_selector.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_quotient_selector.md).
+Its intent is conservative:
+
+- keep the fitting pipeline fixed
+- keep the candidate pool on original tokens only
+- change only the support ranking signal from attention mass to a
+  quotient-aware omission score
+
+That is the smallest direct test of whether the quotient-residual framing can
+improve selection rather than merely explain past results.
+
+The sequencing constraint matters:
+
+- shortlist-only quotient-aware selection first
+- shortlist + existing OMP second
+- full E-aware OMP or alternating joint `(beta, C_v)` only if the cheaper
+  selector-side gains plateau
+
+Current interpretation update:
+
+- Phase 3C now has two main near-term directions:
+  - quotient-aware shortlist architecture on the selection side
+  - gated or controlled quotient-aware refit on the representation side
+- Phase 3C is now best framed as quotient-aware shortlist architecture
+- the first wins survived a broader stability slice but stayed narrow:
+  strongest in `online` and `repeat-prefill` under `1.5x-2.0x` shortlist
+  pressure, while `teacher-forced-suffix` still prefers `attn_mass`
+- oracle-overlap diagnostics support the idea that quotient helps by improving
+  candidate-pool quality for downstream search
+- the simple conformist-filter story is not yet strongly supported
+- the fixed-support refit tranche in
+  [phase3c_quotient_refit.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_quotient_refit.md)
+  showed that quotient-aware refit is also a real lever, but only for some
+  support families:
+  `attn_mass+qvfit` improved across all three tested regimes, while
+  `OMP` / `hybrid` generally did not
+- the compatibility tranche in
+  [phase3c_qvfit_diagnostics.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_qvfit_diagnostics.md)
+  sharpened that further:
+  `qvfit` success is predicted much better by quotient-specific row-scaling
+  diagnostics like `zhat_over_zref_cv` and quotient-row concentration than by
+  ordinary normalized-design conditioning
+- that mechanism also survived the broader stability slice, and a simple hard
+  gate on `zhat_over_zref_cv` beat both `always vfit` and `always qvfit` on
+  the wider prompt surface
+- the next question is therefore mechanism and regime asymmetry across both
+  selection and refit, not whether quotient is operationally relevant at all
 
 The centroid/operator-role assignment precursor in
 [phase3b_centroid_region_precursor.md](/home/csmith/projects/kv_operator_matching/docs/phase3b_centroid_region_precursor.md)

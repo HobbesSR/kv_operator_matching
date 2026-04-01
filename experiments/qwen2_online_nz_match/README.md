@@ -66,6 +66,18 @@ See `config.yaml` for the experiment parameters. Key knobs:
 - [x] Wire up `QueryBank`, `beta_fit.fit_beta`, and `verification.verify` from `src/kv_operator_matching/`
 
 See [phase2_evidence_collection.md](/home/csmith/projects/kv_operator_matching/docs/phase2_evidence_collection.md) for the current task list and imported lessons from `kv_compaction_experiment`.
+See [phase3c_quotient_selector.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_quotient_selector.md) for the next selector-side experiment tranche.
+See [phase3c_shortlist_sweep.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_shortlist_sweep.md) for the shortlist-policy follow-up with fixed downstream OMP + `vfit`.
+See [phase3c_quotient_refit.md](/home/csmith/projects/kv_operator_matching/docs/phase3c_quotient_refit.md) for the fixed-support quotient-aware refit tranche.
+
+Current selector-side status:
+- direct quotient-aware ranking is not a standalone replacement for
+  `attn_mass`
+- quotient-aware shortlist construction is now the preferred Phase 3C direction
+  because it has produced real wins on `online` / `repeat-prefill` slices under
+  tight shortlist pressure
+- quotient-aware refit is also now a live experiment result, but it is support-
+  conditioned rather than a default replacement for anchored `vfit`
 
 ---
 

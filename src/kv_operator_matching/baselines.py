@@ -100,23 +100,11 @@ def attention_mass_baseline(
     TODO: consider using softmax of the query bank's own weights rather
           than recomputing full softmax for efficiency.
     """
-    queries, weights = query_bank.get_weighted_bank()
     keys = head_state.keys
     values = head_state.values
     n = keys.shape[0]
     m = min(budget, n)
-
-    queries_f = queries.float()
-    keys_f = keys.float()
-    weights_f = weights.float()
-
-    # Compute softmax attention weights over full cache for each query.
-    logits = compute_logits(queries_f, keys_f)  # (n_queries, n)
-    attn_weights = torch.softmax(logits, dim=-1)  # (n_queries, n)
-
-    # Aggregate: mass[i] = sum_t w_t * attn_weights[t, i]
-    mass = (weights_f.unsqueeze(-1) * attn_weights).sum(dim=0)  # (n,)
-
+    mass = compute_attention_mass_scores(head_state, query_bank)
     # Select top-m indices by mass
     top_indices = torch.topk(mass, k=m).indices
 
@@ -127,6 +115,238 @@ def attention_mass_baseline(
         support_keys=support_keys,
         support_values=support_values,
         betas=betas,
+    )
+
+
+def compute_attention_mass_scores(
+    head_state: HeadState,
+    query_bank: QueryBank,
+) -> torch.Tensor:
+    """Return aggregated attention-mass scores over the query bank."""
+    queries, weights = query_bank.get_weighted_bank()
+    queries_f = queries.float()
+    keys_f = head_state.keys.float()
+    weights_f = weights.float()
+    logits = compute_logits(queries_f, keys_f)
+    attn_weights = torch.softmax(logits, dim=-1)
+    return (weights_f.unsqueeze(-1) * attn_weights).sum(dim=0)
+
+
+def compute_value_deviation_scores(
+    head_state: HeadState,
+    query_bank: QueryBank,
+) -> torch.Tensor:
+    """Return mean value-deviation scores conditioned on received attention."""
+    queries, weights = query_bank.get_weighted_bank()
+    queries_f = queries.float()
+    keys_f = head_state.keys.float()
+    values_f = head_state.values.float()
+    weights_f = weights.float()
+    logits = compute_logits(queries_f, keys_f)
+    attn_weights = torch.softmax(logits, dim=-1)
+    outputs = attn_weights @ values_f
+    value_gap_sq = (values_f.unsqueeze(0) - outputs.unsqueeze(1)).pow(2).sum(dim=-1)
+    numer = (weights_f.unsqueeze(-1) * attn_weights * value_gap_sq).sum(dim=0)
+    denom = (weights_f.unsqueeze(-1) * attn_weights).sum(dim=0).clamp_min(1e-12)
+    return numer / denom
+
+
+def compute_quotient_omission_scores(
+    head_state: HeadState,
+    query_bank: QueryBank,
+    *,
+    exact_local: bool = True,
+    clamp_eps: float = 1e-6,
+) -> torch.Tensor:
+    """Return bank-aggregated quotient-aware omission scores."""
+    queries, weights = query_bank.get_weighted_bank()
+    queries_f = queries.float()
+    keys_f = head_state.keys.float()
+    values_f = head_state.values.float()
+    weights_f = weights.float()
+
+    logits = compute_logits(queries_f, keys_f)
+    attn_weights = torch.softmax(logits, dim=-1)
+    outputs = attn_weights @ values_f
+    value_gap_sq = (values_f.unsqueeze(0) - outputs.unsqueeze(1)).pow(2).sum(dim=-1)
+    if exact_local:
+        omission_scale = attn_weights / (1.0 - attn_weights).clamp(min=clamp_eps)
+        score_terms = omission_scale.square() * value_gap_sq
+    else:
+        score_terms = attn_weights * value_gap_sq
+    return (weights_f.unsqueeze(-1) * score_terms).sum(dim=0)
+
+
+def shortlist_indices_from_scores(
+    attention_scores: torch.Tensor,
+    quotient_scores: torch.Tensor,
+    shortlist_size: int,
+    *,
+    policy: str,
+    gate_expansion: int = 2,
+) -> torch.Tensor:
+    """Build shortlist indices for a structural shortlist policy."""
+    n = attention_scores.shape[0]
+    shortlist_size = min(max(int(shortlist_size), 1), n)
+    if policy == "attn_mass":
+        return torch.topk(attention_scores, k=shortlist_size).indices
+    if policy == "quotient_omit":
+        return torch.topk(quotient_scores, k=shortlist_size).indices
+    if policy == "rank_blend":
+        attn_order = torch.argsort(attention_scores, descending=True)
+        quot_order = torch.argsort(quotient_scores, descending=True)
+        attn_rank = torch.empty_like(attn_order)
+        quot_rank = torch.empty_like(quot_order)
+        attn_rank[attn_order] = torch.arange(n, device=attn_order.device, dtype=attn_order.dtype)
+        quot_rank[quot_order] = torch.arange(n, device=quot_order.device, dtype=quot_order.dtype)
+        rank_sum = attn_rank.to(dtype=torch.float32) + quot_rank.to(dtype=torch.float32)
+        return torch.topk(-rank_sum, k=shortlist_size).indices
+    if policy == "two_stage_gate":
+        gate_size = min(n, max(shortlist_size, int(gate_expansion * shortlist_size)))
+        gate = torch.topk(attention_scores, k=gate_size).indices
+        gated_scores = quotient_scores[gate]
+        gated_keep = torch.topk(gated_scores, k=shortlist_size).indices
+        return gate[gated_keep]
+    raise ValueError(f"Unsupported shortlist policy: {policy}")
+
+
+def omp_over_shortlist(
+    head_state: HeadState,
+    query_bank: QueryBank,
+    shortlist_indices: torch.Tensor,
+    budget: int,
+) -> CompactRepresentation:
+    """Run the existing mass-frame OMP inside a fixed candidate shortlist."""
+    queries, weights = query_bank.get_weighted_bank()
+    keys = head_state.keys
+    values = head_state.values
+    shortlist_indices = shortlist_indices.to(device=keys.device, dtype=torch.long)
+    shortlist_keys_f = keys[shortlist_indices].float()
+    selected_local, selected_betas = _select_keys_with_omp(
+        key_tensor=shortlist_keys_f,
+        query_tensor=queries.float(),
+        entry_weights=weights.float(),
+        selection_budget=min(budget, shortlist_indices.numel()),
+    )
+    if not selected_local:
+        return attention_mass_baseline(head_state, query_bank, budget)
+    local_index_tensor = torch.tensor(selected_local, device=shortlist_indices.device, dtype=torch.long)
+    index_tensor = shortlist_indices[local_index_tensor]
+    support_keys = keys[index_tensor]
+    support_values = values[index_tensor]
+    betas = torch.tensor(selected_betas, dtype=keys.dtype, device=keys.device)
+    return CompactRepresentation(
+        support_keys=support_keys,
+        support_values=support_values,
+        betas=betas,
+    )
+
+
+def quotient_omission_baseline(
+    head_state: HeadState,
+    query_bank: QueryBank,
+    budget: int,
+    *,
+    exact_local: bool = True,
+    clamp_eps: float = 1e-6,
+) -> CompactRepresentation:
+    """Select support by bank-aggregated quotient-aware omission damage.
+
+    This baseline keeps the tokens whose removal would most damage the local
+    attention output over the query bank. For each query q and token i, it
+    scores the exact local single-atom omission error:
+
+        ||O_{-i}(q) - O(q)||^2
+          = (alpha_i(q) / (1 - alpha_i(q)))^2 * ||v_i - O(q)||^2
+
+    where alpha_i(q) is the full-cache normalized attention weight and O(q) is
+    the full attention output. This is the local normalized counterpart to the
+    quotient-residual omission identity E_i(q) = -w_i(q) (v_i - O(q)).
+
+    If exact_local is False, the score falls back to the cheaper proxy
+
+        alpha_i(q) * ||v_i - O(q)||^2
+
+    which still captures the missing value-sensitive factor ignored by the
+    attention-mass baseline.
+    """
+    keys = head_state.keys
+    values = head_state.values
+    n = keys.shape[0]
+    m = min(budget, n)
+    if m <= 0:
+        return CompactRepresentation(
+            support_keys=keys[:0],
+            support_values=values[:0],
+            betas=torch.ones(0, dtype=keys.dtype, device=keys.device),
+        )
+
+    score = compute_quotient_omission_scores(
+        head_state,
+        query_bank,
+        exact_local=exact_local,
+        clamp_eps=clamp_eps,
+    )
+    top_indices = torch.topk(score, k=m).indices
+
+    support_keys = keys[top_indices]
+    support_values = values[top_indices]
+    betas = torch.ones(m, dtype=keys.dtype, device=keys.device)
+    return CompactRepresentation(
+        support_keys=support_keys,
+        support_values=support_values,
+        betas=betas,
+    )
+
+
+def quotient_omit_omp_baseline(
+    head_state: HeadState,
+    query_bank: QueryBank,
+    budget: int,
+    *,
+    shortlist_multiplier: float = 2.0,
+    exact_local: bool = True,
+    clamp_eps: float = 1e-6,
+) -> CompactRepresentation:
+    """Run OMP inside a quotient-aware shortlist.
+
+    This is the conservative selector sequencing suggested by the
+    quotient-residual note:
+
+    1. rank original tokens by bank-aggregated quotient-aware omission damage
+    2. keep only the top-k candidates for a small shortlist
+    3. run the existing mass-frame OMP inside that shortlist
+
+    The goal is to test whether value-aware pre-screening is already enough to
+    improve support quality before introducing a full E-aware OMP objective.
+    """
+    keys = head_state.keys
+    n = keys.shape[0]
+    m = min(budget, n)
+    if m <= 0:
+        return CompactRepresentation(
+            support_keys=keys[:0],
+            support_values=head_state.values[:0],
+            betas=torch.ones(0, dtype=keys.dtype, device=keys.device),
+        )
+
+    shortlist_size = min(n, max(m, int(round(shortlist_multiplier * m))))
+    shortlist_indices = shortlist_indices_from_scores(
+        compute_attention_mass_scores(head_state, query_bank),
+        compute_quotient_omission_scores(
+            head_state,
+            query_bank,
+            exact_local=exact_local,
+            clamp_eps=clamp_eps,
+        ),
+        shortlist_size,
+        policy="quotient_omit",
+    )
+    return omp_over_shortlist(
+        head_state,
+        query_bank,
+        shortlist_indices,
+        m,
     )
 
 

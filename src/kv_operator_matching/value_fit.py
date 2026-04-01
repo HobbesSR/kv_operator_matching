@@ -73,6 +73,57 @@ def fit_values(
         return _fit_value_matrix(design, weighted_targets, ridge=config.value_ridge)
 
 
+def fit_values_quotient(
+    support_keys: Tensor,
+    betas: Tensor,
+    ref_keys: Tensor,
+    ref_values: Tensor,
+    query_bank: QueryBank,
+    config: BetaFitConfig,
+) -> Tensor:
+    """Fit compact values using the fixed-support quotient-residual objective.
+
+    With support keys and betas fixed, z_hat(q) is fixed. The exact local
+    quotient residual is then:
+
+        E(q; V) = N_hat(q; V) - A_ref(q) * Z_hat(q)
+
+    which is linear in V. This solve therefore minimizes:
+
+        min_V sum_t w_t ||E(q_t; V)||^2
+
+    using the same anchored interpolation scheme as ordinary value fitting.
+
+    This is still a local bank objective. It does not remove the need to judge
+    concatenation behavior on held-out response error.
+    """
+    queries, weights = query_bank.get_weighted_bank()
+    queries = queries.float()
+    weights = weights.float()
+    support_keys = support_keys.float()
+    betas = betas.float()
+    ref_keys = ref_keys.float()
+    ref_values = ref_values.float()
+
+    with torch.no_grad():
+        logits_hat = compute_logits(queries, support_keys)
+        logits_ref = compute_logits(queries, ref_keys)
+        shared_max = torch.maximum(
+            logits_hat.max(dim=-1).values,
+            logits_ref.max(dim=-1).values,
+        ).unsqueeze(-1)
+
+        exp_hat = torch.exp(logits_hat - shared_max) * betas.unsqueeze(0)
+        z_hat = exp_hat.sum(dim=-1, keepdim=True).clamp(min=1e-30)
+        targets = compute_response(queries, ref_keys, ref_values) * z_hat
+
+        sqrt_w = weights.sqrt().unsqueeze(-1)
+        design = exp_hat * sqrt_w
+        weighted_targets = targets * sqrt_w
+
+        return _fit_value_matrix(design, weighted_targets, ridge=config.value_ridge)
+
+
 def refit_values(
     compact_rep: CompactRepresentation,
     ref_keys: Tensor,
@@ -87,6 +138,35 @@ def refit_values(
     rather than an unconstrained replacement.
     """
     fitted_values = fit_values(
+        compact_rep.support_keys,
+        compact_rep.betas,
+        ref_keys,
+        ref_values,
+        query_bank,
+        config,
+    )
+    alpha = float(config.value_interpolation)
+    if not 0.0 <= alpha <= 1.0:
+        raise ValueError(
+            f"value_interpolation must be in [0, 1], got {config.value_interpolation!r}."
+        )
+    new_values = compact_rep.support_values * (1.0 - alpha) + fitted_values * alpha
+    return CompactRepresentation(
+        support_keys=compact_rep.support_keys,
+        support_values=new_values,
+        betas=compact_rep.betas,
+    )
+
+
+def refit_values_quotient(
+    compact_rep: CompactRepresentation,
+    ref_keys: Tensor,
+    ref_values: Tensor,
+    query_bank: QueryBank,
+    config: BetaFitConfig,
+) -> CompactRepresentation:
+    """Refit values with the fixed-support quotient-residual objective."""
+    fitted_values = fit_values_quotient(
         compact_rep.support_keys,
         compact_rep.betas,
         ref_keys,
